@@ -23,6 +23,8 @@ dependencies = [
     "einops>=0.8.1",
     "peft>=0.15.2",
     "qwen-vl-utils>=0.0.11",
+    "torchaudio>=2.7.1",
+    "librosa>=0.11.0",
 ]
 
 # https://docs.astral.sh/uv/concepts/projects/workspaces/

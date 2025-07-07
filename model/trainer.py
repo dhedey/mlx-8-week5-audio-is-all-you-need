@@ -18,20 +18,17 @@ from typing import Optional
 import time
 
 from .common import TrainingState, TrainingOverrides, ModelTrainerBase, ModelBase, TrainingConfig, BatchResults, ValidationResults
-from .models import CaptionSection, CaptionSectionResult, ImageCaptioningModel, ImageCaptioningModel
-from .prepared_datasets import generate_image_caption_datasets, noop_collate
+from .models import CaptionSection, CaptionSectionResult, UrbanSoundClassifierModel, UrbanSoundClassifierModel
+from .prepared_datasets import generate_urban_classifier_dataset, noop_collate
 
+class UrbanSoundClassifierModelTrainingConfig(TrainingConfig):
+    pass
 
-class ImageCaptioningModelTrainingConfig(TrainingConfig):
-    dataset_kind: str # "standard" or "pirate"
-    print_after_batches: int = 1 # Override default
-    validation_max_print_examples: int = 5
-
-class ImageCaptioningModelTrainer(ModelTrainerBase):
+class UrbanSoundClassifierModelTrainer(ModelTrainerBase):
     def __init__(
             self,
-            model: ImageCaptioningModel,
-            config: ImageCaptioningModelTrainingConfig,
+            model: UrbanSoundClassifierModel,
+            config: UrbanSoundClassifierModelTrainingConfig,
             overrides: Optional[TrainingOverrides] = None,
             continuation: Optional[TrainingState] = None,
         ):
@@ -41,15 +38,15 @@ class ImageCaptioningModelTrainer(ModelTrainerBase):
         self.model = model
         self.config = config
 
-        print("Preparing datasets...")
-        train_dataset, eval_dataset = generate_image_caption_datasets(config.dataset_kind)
+        validation_fold = 1
+        print(f"Preparing datasets with validation_fold = {validation_fold}...")
+        train_dataset, eval_dataset = generate_urban_classifier_dataset(validation_fold)
 
         print(f"Training set size: {len(train_dataset)}")
         print(f"Test set size: {len(eval_dataset)}")
 
         self.train_loader = self.create_dataloader(train_dataset, self.config.batch_size, 2, model.collate)
         self.test_loader = self.create_dataloader(eval_dataset, self.config.batch_size, 2, model.collate)
-        self.uncollated_validation_loader = self.create_dataloader(eval_dataset, 5, 0, noop_collate)
 
         print()
 
@@ -74,51 +71,15 @@ class ImageCaptioningModelTrainer(ModelTrainerBase):
     def process_batch(self, collated_batch) -> BatchResults:
         device = self.model.get_device()
 
-        caption_section: CaptionSection = collated_batch["caption"]
-
-        caption_section_ids = caption_section.section_token_ids.to(device)
-        caption_section_result: CaptionSectionResult = self.model(collated_batch)
-        caption_section_logits = caption_section_result.section_logits.to(device)
-
-        # We offset expected and actual by one
-        # We remove the useless prediction for the SectionEnd token
-        expected_token_ids = caption_section_ids[:, 1:]
-        actual_output_logits = caption_section_logits[:, :-1, :]
-
-        # Sanity check that we're attempting to learn that that there should be a section end
-        assert (expected_token_ids[0, :] == self.model.special_token_ids.section_end).any()
-
-        criterion = nn.CrossEntropyLoss(ignore_index=self.model.special_token_ids.padding)
-        loss = criterion(
-            # The CrossEntropyLoss expects the second dimension to be the token id dimension
-            einops.rearrange(actual_output_logits, "batch position token_id -> batch token_id position"),
-            expected_token_ids,
-        )
-
-        total_non_padding_predictions = (expected_token_ids != self.model.special_token_ids.padding).sum().item()
+        self.model(collated_batch)
 
         return BatchResults(
             total_loss=loss,
             num_samples=total_non_padding_predictions,
             intermediates={
-                "expected_ids": expected_token_ids,
-                "logits": actual_output_logits,
+                # ...
             }
         )
     
     def custom_validation(self) -> Optional[dict]:
-        print_example_count = 0
-        for raw_batch in self.uncollated_validation_loader:
-            for item in raw_batch:
-                if print_example_count >= self.config.validation_max_print_examples:
-                    break
-                print(f"===== Example {print_example_count + 1} =====")
-                print(f"- Actual caption   : {item["caption"]}")
-                print(f"- Generated caption: ", end="", flush=True)
-                for token in self.model.generate_caption_streaming(item["image"]):
-                    print(token, end="", flush=True)
-                print()
-                print()
-                print_example_count += 1
-
         return None

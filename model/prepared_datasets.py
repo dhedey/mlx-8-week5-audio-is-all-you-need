@@ -1,70 +1,85 @@
 import datasets
 import os
 import huggingface_hub
+import torchaudio
+import torch
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
 
 def noop_collate(batch):
     return batch
 
-def flickr30k_is_train(item) -> bool:
-    return item["split"] == "train"
+def resample_and_trim_or_pad(soundfile, target_sample_rate, target_length_seconds) -> torch.Tensor:
+    soundfile_array, sample_rate = soundfile["array"], soundfile["sampling_rate"]
 
-def flickr30k_is_val(item) -> bool:
-    return item["split"] != "train"
+    if soundfile_array.ndim == 1:
+        waveform = torch.from_numpy(soundfile_array).to(torch.float).unsqueeze(0)  # [1, time]
+    else:
+        waveform = torch.from_numpy(soundfile_array).to(torch.float).T  # [channels, time]
 
-def flickr30k_take_first_caption_truncated_v2(dataset_batch, max_caption_length: int = 300):
-    captions: list[str] = []
-    images = []
-    for image, image_captions in zip(dataset_batch["image"], dataset_batch["caption"]):
-        for caption in image_captions:
-            if len(caption) > max_caption_length:
-                # Find the last '.' before position max_caption_length
-                cut_pos = caption.rfind('.', 0, max_caption_length - 1) + 1
-                if cut_pos == 0:
-                    cut_pos = caption.rfind('!', 0, max_caption_length - 1) + 1
-                if cut_pos == 0:
-                    cut_pos = caption.rfind('?', 0, max_caption_length - 1) + 1
-                if cut_pos == 0:
-                    cut_pos = max_caption_length
-                caption = caption[:cut_pos]
+    if sample_rate != target_sample_rate:
+        resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=target_sample_rate)
+        waveform = resampler(waveform)
 
-            captions.append(caption)
-            images.append(image)
-            break  # Only use the first caption for each image for now to speed up epochs
+    # Trim or pad
+    target_num_samples = target_sample_rate * target_length_seconds
+    num_samples = waveform.shape[-1]
+    if num_samples > target_num_samples:
+        waveform = waveform[..., :target_num_samples]
+    elif num_samples < target_num_samples:
+        waveform = F.pad(waveform, (0, target_num_samples - num_samples))
+
+    return waveform
+
+def urbansound8K_prepare(dataset_item):
+    SAMPLE_RATE = 16000
+    FIXED_LENGTH_SECONDS = 4
+
+    waveform = resample_and_trim_or_pad(
+        soundfile=dataset_item["audio"],
+        target_sample_rate=SAMPLE_RATE,
+        target_length_seconds=FIXED_LENGTH_SECONDS,
+    )
+
+    transform = torchaudio.transforms.MelSpectrogram(sample_rate=SAMPLE_RATE)
+    spectrogram = transform(waveform)
+
+    # elapsed_seconds = dataset_item["end"] - dataset_item["start"]
+    #
+    # plt.figure(figsize=(10, 4))
+    # plt.imshow(spectrogram.squeeze(0).numpy(), aspect='auto', origin='lower', cmap='magma')
+    # plt.colorbar(format='%+2.0f dB')
+    # plt.xlabel('Time')
+    # plt.ylabel('Mel Frequency Bin')
+    # plt.title(f'Mel Spectrogram ({elapsed_seconds}/4 seconds)')
+    # plt.tight_layout()
+    # plt.show()
 
     return {
-        "image": images,
-        "caption": captions,
+        "spectrogram": spectrogram,
+        "class_id": dataset_item["classID"],
+        "class": dataset_item["class"],
+        "salience": dataset_item["salience"],
     }
 
-def generate_image_caption_datasets(dataset_kind = "standard"):
+def generate_urban_classifier_dataset(validation_fold: int):
     data_folder = os.path.join(os.path.dirname(__file__), "datasets")
 
-    match dataset_kind:
-        case "standard":
-            # The dataset is improperly pre-split, and just has a train partition. Use that.
-            ds = datasets.load_dataset(
-                "nlphuji/flickr30k",
-                cache_dir=data_folder,
-                split="test",
-            )
-        case "pirate":
-            print("You may need to login so that you can have access to the private dataset.")
-            print("If so, visit https://huggingface.co/settings/tokens to get a token (and you may need to uncomment this line below)")
-            print()
-            # huggingface_hub.login()
-            ds = datasets.load_dataset(
-                "david-edey/flickr30k-pirate-captions",
-                cache_dir=data_folder,
-                token=True,
-                split="test",
-            )
-        case _:
-            raise ValueError(f"Unknown dataset kind: {dataset_kind}")
+    assert 1 <= validation_fold <= 10
 
+    dataset = datasets.load_dataset(
+        "danavery/urbansound8K",
+        cache_dir=data_folder,
+        # It only comes with one split "train" but advises we do cross validation based on the fold
+        split="train",
+    )
 
-    train_dataset = ds.filter(flickr30k_is_train)
-    train_dataset = train_dataset.map(flickr30k_take_first_caption_truncated_v2, batched=True, remove_columns=ds.column_names)
-    eval_dataset = ds.filter(flickr30k_is_val)
-    eval_dataset = eval_dataset.map(flickr30k_take_first_caption_truncated_v2, batched=True, remove_columns=ds.column_names)
+    train_dataset = dataset.filter(lambda x: x["fold"] != validation_fold)
+    train_dataset = train_dataset.map(urbansound8K_prepare, remove_columns=dataset.column_names)
+    eval_dataset = dataset.filter(lambda x: x["fold"] == validation_fold)
+    eval_dataset = eval_dataset.map(urbansound8K_prepare, remove_columns=dataset.column_names)
 
     return train_dataset, eval_dataset
+
+if __name__ == "__main__":
+    generate_urban_classifier_dataset(1)
