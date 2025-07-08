@@ -57,6 +57,7 @@ class ConvolutionalUrbanSoundClassifierModel(UrbanSoundClassifierModel):
 
         self.convolutional_layers = nn.Sequential(*[
             # 2d convolution over time and frequency
+            # [Batch, Channels=1, Freq=n_mels, Time=T]
             nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1),  # [B, 32, n_mels, T]
             nn.BatchNorm2d(32),
             nn.GELU(),

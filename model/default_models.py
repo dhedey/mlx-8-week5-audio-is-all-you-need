@@ -13,9 +13,8 @@ DEFAULT_MODEL_PARAMETERS = {
         "model": models.ConvolutionalUrbanSoundClassifierModelConfig(),
         "model_trainer": UrbanSoundClassifierModelTrainer,
         "training": UrbanSoundClassifierModelTrainingConfig(
-            # Note: This is a very small batch size for Qwen models, but it is necessary to fit in memory.
-            batch_size=4,
-            epochs=1,
+            batch_size=128,
+            epochs=20,
             learning_rate=0.0005,
             optimizer="adamw",
         ),
