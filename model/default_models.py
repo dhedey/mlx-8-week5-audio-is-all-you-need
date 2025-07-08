@@ -24,7 +24,7 @@ DEFAULT_MODEL_PARAMETERS = {
         "model_trainer": UrbanSoundClassifierModelTrainer,
         "training": UrbanSoundClassifierModelTrainingConfig(
             batch_size=128,
-            epochs=20,
+            epochs=5,
             print_after_batches=1,
             learning_rate=0.0005,
             optimizer="adamw",
@@ -38,7 +38,7 @@ DEFAULT_MODEL_PARAMETERS = {
         "model_trainer": UrbanSoundClassifierModelTrainer,
         "training": UrbanSoundClassifierModelTrainingConfig(
             batch_size=128,
-            epochs=20,
+            epochs=5,
             print_after_batches=1,
             learning_rate=0.0005,
             optimizer="adamw",
