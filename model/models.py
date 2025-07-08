@@ -42,11 +42,20 @@ class UrbanSoundClassifierModel(ModelBase):
         }
 
     def forward(self, collated_batch) -> torch.Tensor:
-        # Takes MelSpectrograms and returns logits for each class
+        """
+        Takes MelSpectrograms and returns logits for each class
+        """
         raise NotImplementedError("Implement in subclass")
 
+    def total_mels(self) -> int:
+        raise NotImplementedError("Implement in subclass")
+
+    def total_time_frames(self) -> int:
+        raise NotImplementedError("Implement in subclass")
+
+
 class ConvolutionalUrbanSoundClassifierModelConfig(ModuleConfig):
-    pass
+    dropout: float = 0.1
 
 class ConvolutionalUrbanSoundClassifierModel(UrbanSoundClassifierModel):
     def __init__(self, model_name: str, config: ConvolutionalUrbanSoundClassifierModelConfig):
@@ -62,12 +71,14 @@ class ConvolutionalUrbanSoundClassifierModel(UrbanSoundClassifierModel):
             nn.BatchNorm2d(32),
             nn.GELU(),
             nn.MaxPool2d((2, 2)),  # [B, 32, n_mels//2, T//2]
+            nn.Dropout(config.dropout),
 
             # 2d convolution over time and frequency
             nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(64),
             nn.GELU(),
             nn.MaxPool2d((2, 2)),  # [B, 64, n_mels//4, T//4]
+            nn.Dropout(config.dropout),
         ])
         self.classifier = nn.Sequential(*[
             nn.AdaptiveAvgPool2d((1, 1)),
@@ -76,40 +87,42 @@ class ConvolutionalUrbanSoundClassifierModel(UrbanSoundClassifierModel):
         ])
 
     def forward(self, collated_batch) -> torch.Tensor:
-        # Takes MelSpectrograms and returns logits for each class
+        """
+        Takes MelSpectrograms and returns logits for each class
+        """
         # (batch, channels=1, freq=num_mels, time)
         hidden_state = self.convolutional_layers(collated_batch["spectrograms"])
         return self.classifier(hidden_state)
 
-class TransformerUrbanSoundClassifierModelConfig(ModuleConfig):
-    def __init__(self,
-                 embed_dim=128,
-                 patch_mels=16,
-                 patch_time=16,
-                 num_heads=4,
-                 num_layers=2,
-                 mlp_dim=256,
-                 dropout=0.1):
-        self.embed_dim = embed_dim
-        self.patch_mels = patch_mels
-        self.patch_time = patch_time
-        self.num_heads = num_heads
-        self.num_layers = num_layers
-        self.mlp_dim = mlp_dim
-        self.dropout = dropout
+    def total_mels(self) -> int:
+        return 128
 
-class TransformerUrbanSoundClassifierModel(UrbanSoundClassifierModel):
-    def __init__(self, model_name: str, config: TransformerUrbanSoundClassifierModelConfig):
+    def total_time_frames(self) -> int:
+        return 321
+
+class PatchTransformerUrbanSoundClassifierModelConfig(ModuleConfig):
+    embed_dim: int = 128
+    patch_size_mels: int = 16
+    patch_size_time: int = 16
+    num_heads: int = 4
+    num_layers: int = 2
+    mlp_dim: int = 256
+    dropout: float = 0.1
+    num_mels: int = 64
+    time_frames: int = 321
+
+class PatchTransformerUrbanSoundClassifierModel(UrbanSoundClassifierModel):
+    def __init__(self, model_name: str, config: PatchTransformerUrbanSoundClassifierModelConfig):
         super().__init__(model_name=model_name, config=config)
         self.config = config
         # Input: batch of spectrograms.shape = [batch, 1, n_mels, time]
         # Input for transformer: [batch, seq_len, feature_dim]
         num_classes = 10
 
-        self.n_mels = 64
-        self.time_frames = 128
-        self.patch_mels = config.patch_mels
-        self.patch_time = config.patch_time
+        self.n_mels = config.num_mels
+        self.time_frames = config.time_frames
+        self.patch_mels = config.patch_size_mels
+        self.patch_time = config.patch_size_time
         self.embed_dim = config.embed_dim
 
         self.num_patches_mel = self.n_mels // self.patch_mels
@@ -141,33 +154,34 @@ class TransformerUrbanSoundClassifierModel(UrbanSoundClassifierModel):
 
 
     def forward(self, collated_batch) -> torch.Tensor:
-        # Takes MelSpectrograms and returns logits for each class
-        # (batch, channels=1, freq=num_mels, time)
+        """
+        Takes MelSpectrograms and returns logits for each class
+        """
 
-        # Patchify input collated_batch [B,1,64,128] -> [B, embed_dim, 4, 8]
+        # Patchify [B,1,64,128] -> [B, embed_dim, patch_freq_index=4, patch_time_index=8]
         patches = self.patch_embedding(collated_batch["spectrograms"])
 
         # Flatten and permute to [batch, seq_len=32, embed_dim]
         patch_embeddings = patches.flatten(2).transpose(1,2)
 
         B, N, D = patch_embeddings.shape
-
-        # Create the [CLS] token
         cls_token = self.cls_token.expand(B, -1, -1) # [B, 1, D]
 
-        # Prepend the [CLS] token to the sequence
-        x = torch.cat([cls_token, patch_embeddings], dim=1)  # [B, 1 + N, D]
+        input_state = torch.cat([cls_token, patch_embeddings], dim=1)  # [B, 1 + N, D]
+        input_state = input_state + self.pos_embedding[:, :N+1]
 
-        # Add positional encoding
-        x = x + self.pos_embedding[:, :N+1]
+        hidden_state = self.encoder(input_state)
 
-        # Pass through encoder
-        hidden_state = self.encoder(x)
-
-        # Grab only the [CLS] token, as it contains aggregated global information from all patches 
+        # The [CLS] position should contain aggregated global information from all patches 
         cls_out = hidden_state[:,0]
 
         return self.classifier(cls_out)
+
+    def total_mels(self) -> int:
+        return self.n_mels
+
+    def total_time_frames(self) -> int:
+        return self.time_frames
     
 if __name__ == "__main__":
    print("Run default_models instead of this file")

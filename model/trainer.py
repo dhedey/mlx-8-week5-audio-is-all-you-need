@@ -40,7 +40,10 @@ class UrbanSoundClassifierModelTrainer(ModelTrainerBase):
 
         validation_fold = 1
         print(f"Preparing datasets with validation_fold = {validation_fold}...")
-        train_dataset, eval_dataset = generate_urban_classifier_dataset(validation_fold)
+        num_mels = model.total_mels()
+        total_time_frames = model.total_time_frames()
+
+        train_dataset, eval_dataset = generate_urban_classifier_dataset(validation_fold, num_mels, total_time_frames)
 
         print(f"Training set size: {len(train_dataset)}")
         print(f"Test set size: {len(eval_dataset)}")
@@ -99,5 +102,5 @@ class UrbanSoundClassifierModelTrainer(ModelTrainerBase):
         prediction_accuracy = custom_validation_metrics["correct_predictions"] / total_samples
         return {
             "prediction_accuracy": prediction_accuracy,
-            "loss": 1 - prediction_accuracy
+            "objective": prediction_accuracy
         }
