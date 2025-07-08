@@ -48,4 +48,4 @@ if __name__ == "__main__":
         print(f"Latest validation metrics: {trainer.latest_validation_results}")
 
         print(f"Running model to check it's working...")
-        trainer.custom_validation()
+        trainer.additional_custom_validation()

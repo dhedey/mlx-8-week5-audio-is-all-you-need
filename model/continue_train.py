@@ -247,7 +247,8 @@ if __name__ == "__main__":
             artifact_metadata = {
                 "model_config": trainer.model.config.to_dict(),
                 "training_config": trainer.config.to_dict(),
-                "final_validation_loss": results.last_validation.validation_loss,
+                "final_validation_objective": results.last_validation.objective,
+                "final_validation_loss": results.last_validation.train_comparable_loss,
                 "final_train_loss": results.last_training_epoch.average_loss,
                 "total_epochs": results.total_epochs,
             }

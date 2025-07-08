@@ -152,9 +152,10 @@ def train_sweep_run():
         # Log final metrics
         log_data = {
             "final_train_average_loss": results.last_training_epoch.average_loss,
+            "final_validation_average_loss": results.last_validation.train_comparable_loss,
             "best_train_average_loss": results.best_training_epoch.average_loss,
-            "final_validation_loss": results.last_validation.validation_loss,
-            "best_validation_loss": results.best_validation.validation_loss,
+            "final_validation_objective": results.last_validation.objective,
+            "best_validation_objective": results.best_validation.objective,
             "total_epochs": results.total_epochs,
         }
         wandb.log(log_data)
@@ -165,11 +166,11 @@ def train_sweep_run():
                 # Prepare metadata for the artifact
                 artifact_metadata = {
                     "config": dict(config),
-                    "final_validation_loss": results.last_validation.validation_loss,
+                    "final_validation_objective": results.last_validation.objective,
+                    "final_validation_loss": results.last_validation.train_comparable_loss,
                     "final_train_loss": results.last_training_epoch.average_loss,
                     "total_epochs": results.total_epochs,
                     "wandb_run_id": run_id,
-                    "model_architecture": "ImageSequenceTransformer",
                 }
                 
                 # Get model save paths

@@ -72,23 +72,30 @@ class TrainingConfig(PersistableData):
     early_stopping: bool = False
     early_stopping_patience: int = 5
 
-class ValidationResults(PersistableData, extra="allow"):
+class ValidationResults(PersistableData):
     epoch: int
     train_comparable_loss: float = 0.0 # Default to 0.0 to support backwards compatibility
     """
-    The average training loss is a measure of how well the model performs on the validation set, in comparison to the training set.
-    IMPORTANT: This must be comparable to the training loss, to act as a measure of overfitting.
+    The average training loss is a measure of how well the model performs on the validation set.
+    It should be comparable with the average loss from a training epoch, and can act as a measure of
+    overfitting.
     """
-    # This should be some measure of how well the validation went. Low is good.
-    # It could simply be the average loss over the validation set, or some other better metric.
-    # It should be comparable between epochs, but is not necessarily comparable to the training loss.
-    validation_loss: float
+
+    custom: dict
     """
-    The validation loss is a good measure of how well the model performs on the validation set.
-    It could simply be the same as average_training_loss but could be any other better metric, so long as it is comparable between epochs.
-    IMPORTANT: It is not necessarily comparable to the training average loss.
+    Custom results, depending on the trainer
     """
-    # You can add more fields here simply by adding them to the constructor
+
+    @property
+    def objective(self) -> float:
+        """
+        The validation objective is a measure of how well the model performs on the validation set (high is good)
+        My default, it's `1 / average_training_loss` but could be any other better metric, so long as it is comparable between epochs.
+        """
+        if "objective" in self.custom:
+            return self.custom["objective"]
+        else:
+            return 1/self.train_comparable_loss
 
 @dataclass
 class BatchResults:
@@ -517,15 +524,32 @@ class ModelTrainerBase:
     def process_batch(self, raw_batch) -> BatchResults:
         raise NotImplementedError("This method should be implemented by subclasses.")
 
-    def custom_validation(self) -> Optional[dict]:
+    def start_custom_validation(self) -> dict:
         """
-        This allows trainers to add specific validations.
-        If they have a better measure of validation success, they should return "validation_loss" in their dictionary,
-        which will override the train_comparable_loss
+        This method may be overridden by trainers wanting custom validation.
+        It should return initialized custom validation metrics which are fed into the `custom_validate_batch` method.
         """
-        print("No custom validations have been defined in the trainer, skipping")
-        print()
-        return None
+        return {}
+
+    def custom_validate_batch(self, custom_validation_metrics: dict, batch_results: BatchResults, batch_num: int, total_batches: int):
+        """
+        This method may be overridden by trainers wanting custom validation.
+        It is called after applying the model to a batch of the validation set, and may mutate the
+        custom_validation_metrics dictionary to add information about this batch.
+        batch_num is 1-indexed, so batch_num==total_batches is the last batch
+        """
+        pass
+
+    def finalize_custom_validation(self, total_samples: int, total_batches: int, custom_validation_metrics: dict) -> dict:
+        """
+        This method may be overridden by trainers wanting custom validation.
+        By default, this returns the custom validation metrics as-is, but can be overridden to perform final
+        calculations on the metrics.
+        If you have a better measure of validation success than the train_comparable_loss, you can return a "loss" in
+        the dictionary.
+        You may also choose to perform additional custom validation here / print additional stuff.
+        """
+        return custom_validation_metrics
 
     @classmethod
     def load_with_model(cls, model_name: Optional[str] = None, overrides: Optional[TrainingOverrides] = None, device: Optional[str] = None, model_path: Optional[str] = None) -> Self:
@@ -575,12 +599,20 @@ class ModelTrainerBase:
                     }
                     def add_prefixed(data: dict, new_data: dict, prefix: str):
                         for key, value in new_data.items():
-                            if key == "epoch":
-                                continue
-                            if key.startswith(prefix):
-                                data[key] = value
-                            else:
-                                data[f"{prefix}{key}"] = value
+                            match key:
+                                case "epoch": # Ignore
+                                    continue
+                                case "custom": # Flatten "custom" keys into the other data
+                                    add_prefixed(value, new_data, prefix)
+                                    continue
+                                case str():
+                                    if key.startswith(prefix):
+                                        data[key] = value
+                                    else:
+                                        data[f"{prefix}{key}"] = value
+                                case _:
+                                    raise ValueError(f"Unknown prefix type {prefix} in training.")
+
                     add_prefixed(log_data, self.latest_validation_results.to_dict(), "validation_")
                     add_prefixed(log_data, self.latest_training_results.to_dict(), "train_")
     
@@ -665,7 +697,7 @@ class ModelTrainerBase:
                 print()
                 print(f"Starting mid-epoch custom validation at batch {batch_num}:")
                 print()
-                self.custom_validation()
+                self.additional_custom_validation()
 
             if batch_num == total_batches: # Handle self.config.batch_limit
                 break
@@ -692,12 +724,12 @@ class ModelTrainerBase:
         if self.best_training_results is None or training_results.average_loss < self.best_training_results.average_loss:
             self.best_training_results = training_results
 
-    def train_comparable_validation(self) -> ValidationResults:
+    def _run_validation(self) -> ValidationResults:
         print_every = self.config.print_after_batches
         running_loss = 0.0
         running_samples = 0
 
-        total_batches = len(self.train_data_loader)
+        total_batches = len(self.validation_data_loader)
         start_time = time.time()
 
         if self.config.batch_limit is not None and total_batches >= self.config.batch_limit:
@@ -709,6 +741,7 @@ class ModelTrainerBase:
         print(f"> Starting train-comparable validation... (batch_size={self.config.batch_size}, total_batches={total_batches_text})")
         print()
 
+        custom_validation_metrics = self.start_custom_validation()
         total_loss = 0.0
         total_samples = 0
         for batch_idx, raw_batch in enumerate(self.validation_data_loader):
@@ -721,6 +754,14 @@ class ModelTrainerBase:
             total_loss += loss.item()
 
             batch_num = batch_idx + 1
+
+            self.custom_validate_batch(
+                custom_validation_metrics,
+                batch_results,
+                batch_num,
+                total_batches,
+            )
+
             if batch_num % print_every == 0 or batch_num == total_batches:
                 print(f"Validation batch {batch_num}/{total_batches}, Recent Avg Loss: {(running_loss / running_samples):.3g}")
                 running_loss = 0.0
@@ -731,20 +772,22 @@ class ModelTrainerBase:
 
         average_loss = total_loss / total_samples if total_samples > 0 else 0.0
 
+        finalized_custom_results = self.finalize_custom_validation(total_samples, total_batches, custom_validation_metrics)
+
         validation_results = ValidationResults(
             epoch=self.epoch,
             train_comparable_loss=average_loss,
-            validation_loss=average_loss,
+            custom=finalized_custom_results,
         )
 
         self.latest_validation_results = validation_results
         if len(self.all_validation_results) == 0 or self.all_validation_results[-1].epoch < validation_results.epoch:
             self.all_validation_results.append(validation_results)
-        if self.best_validation_results is None or validation_results.validation_loss < self.best_validation_results.validation_loss:
+        if self.best_validation_results is None or validation_results.objective > self.best_validation_results.objective:
             self.best_validation_results = validation_results
 
         time_elapsed = time.time() - start_time
-        validation_average_train_loss = self.latest_validation_results.train_comparable_loss
+        validation_average_train_loss = validation_results.train_comparable_loss
         if self.latest_training_results is not None:
             train_average_loss = self.latest_training_results.average_loss
             overfitting_measure = (validation_average_train_loss - train_average_loss) / validation_average_train_loss if validation_average_train_loss > 0 else float('inf')
@@ -753,8 +796,14 @@ class ModelTrainerBase:
             overfitting_measure = "UNK"
 
         print()
-        print(f"Train-comparable validation complete (Val/Train Loss: {validation_average_train_loss:.3g}/{train_average_loss:.3g}, Overfitting: {overfitting_measure:.2%}, Time: {time_elapsed:.1f}s)")
+        print(f"Validation complete (Val/Train Loss: {validation_average_train_loss:.3g}/{train_average_loss:.3g}, Overfitting: {overfitting_measure:.2%}, Time: {time_elapsed:.1f}s)")
         print()
+
+        custom_results_str = str(finalized_custom_results)
+        if custom_results_str != "" and custom_results_str != "{}":
+            print(f"Custom validation results:")
+            print(f"{custom_results_str}")
+            print()
 
         return validation_results
 
@@ -762,18 +811,7 @@ class ModelTrainerBase:
         self.model.eval()
 
         with torch.no_grad():
-
-            print("> Starting custom validation...")
-            print()
-            custom_results = self.custom_validation()
-            print()
-
-            validation_results = self.train_comparable_validation()
-            if custom_results is None:
-                custom_results = {}
-
-            for key, value in custom_results.items():
-                validation_results.key = value
+            validation_results = self._run_validation()
 
         return validation_results
 
@@ -803,12 +841,12 @@ class ModelTrainerBase:
             return
 
         best_model_name = self.model.model_name + '-best'
-        best_validation_loss = None
+        best_validation_objective = None
         best_validation_epoch = None
         if ModelBase.exists(model_name=best_model_name):
             try:
                 best_training_state = ModelBase.load_only_training_state(model_name=best_model_name)
-                best_validation_loss = best_training_state.latest_validation_results.validation_loss
+                best_validation_objective = best_training_state.latest_validation_results.objective
                 best_validation_epoch = best_training_state.latest_validation_results.epoch
             except Exception as e:
                 print(f"⚠️ Failed to load the best model training state: {e}")
@@ -816,18 +854,18 @@ class ModelTrainerBase:
         def format_optional_float(value):
             return f"{value:.3g}" if value is not None else "N/A"
 
-        latest_validation_loss = self.latest_validation_results.validation_loss
+        latest_validation_objective = self.latest_validation_results.objective
 
-        is_improvement = best_validation_loss is None or latest_validation_loss < best_validation_loss
+        is_improvement = best_validation_objective is None or latest_validation_objective > best_validation_objective
         if is_improvement:
-            print(f"The current validation loss {format_optional_float(latest_validation_loss)} is better than the previous best validation loss {format_optional_float(best_validation_loss)} from epoch {best_validation_epoch}, saving as {best_model_name}...")
+            print(f"The current validation objective {format_optional_float(latest_validation_objective)} is better than the previous best validation objective {format_optional_float(best_validation_objective)} from epoch {best_validation_epoch}, saving as {best_model_name}...")
             self.model.save_model_data(
                 file_name=best_model_name,
                 training_config=self.config,
                 training_state=training_state,
             )
         else:
-            print(f"The current validation loss {format_optional_float(latest_validation_loss)} is not better than the previous best validation loss {format_optional_float(best_validation_loss)} from epoch {best_validation_epoch}, so not saving as best.")
+            print(f"The current validation objective {format_optional_float(latest_validation_objective)} is not better than the previous best validation objective {format_optional_float(best_validation_objective)} from epoch {best_validation_epoch}, so not saving as best.")
 
 def upload_model_artifact(
     model_name: str,

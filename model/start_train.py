@@ -152,7 +152,8 @@ if __name__ == "__main__":
             "model_name": model_name,
             "model_config": parameters["model"].to_dict(),
             "training_config": parameters["training"].to_dict(),
-            "final_validation_loss": results.last_validation.validation_loss,
+            "final_validation_objective": results.last_validation.objective,
+            "final_validation_loss": results.last_validation.train_comparable_loss,
             "final_train_loss": results.last_training_epoch.average_loss,
             "total_epochs": results.total_epochs,
         }

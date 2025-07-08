@@ -69,17 +69,35 @@ class UrbanSoundClassifierModelTrainer(ModelTrainerBase):
         return self.test_loader
 
     def process_batch(self, collated_batch) -> BatchResults:
-        device = self.model.get_device()
+        num_samples = len(collated_batch["labels"])
+        logits = self.model(collated_batch)      # (Batch, Classes) => Logits
+        label_indices = collated_batch["labels"] # (Batch) => Class index
+        criterion = nn.CrossEntropyLoss()
 
-        self.model(collated_batch)
+        loss = criterion(logits, label_indices)
 
         return BatchResults(
             total_loss=loss,
-            num_samples=total_non_padding_predictions,
+            num_samples=num_samples,
             intermediates={
-                # ...
+                "logits": logits,
+                "label_indices": label_indices,
             }
         )
-    
-    def custom_validation(self) -> Optional[dict]:
-        return None
+
+    def start_custom_validation(self) -> dict:
+        return {
+            "correct_predictions": 0,
+        }
+
+    def custom_validate_batch(self, custom_validation_metrics: dict, batch_results: BatchResults, batch_num: int, total_batches: int):
+        best_guesses: torch.Tensor = batch_results.intermediates["logits"].argmax(axis = -1)         # (Batch) => Index
+        correct_guesses: torch.Tensor = best_guesses == batch_results.intermediates["label_indices"] # (Batch) => True/False
+        custom_validation_metrics["correct_predictions"] += correct_guesses.sum().item()
+
+    def finalize_custom_validation(self, total_samples: int, total_batches: int, custom_validation_metrics: dict) -> dict:
+        prediction_accuracy = custom_validation_metrics["correct_predictions"] / total_samples
+        return {
+            "prediction_accuracy": prediction_accuracy,
+            "loss": 1 - prediction_accuracy
+        }
