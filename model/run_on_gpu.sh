@@ -12,7 +12,7 @@ source ~/.local/bin/env
 
 cd ~
 git clone https://github.com/dhedey/mlx-8-week5-audio-is-all-you-need
-cd mlx-8-week4-multimodel-image-captioning
+cd mlx-8-week5-audio-is-all-you-need
 uv sync
 
 # Change if you're someone else!
