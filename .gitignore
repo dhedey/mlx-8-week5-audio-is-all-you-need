@@ -2,6 +2,8 @@
 wandb
 datasets
 artifacts
+model/snapshots
+model/saved # Backward compatability
 
 # Python specific
 __pycache__/

@@ -55,19 +55,33 @@ if __name__ == "__main__":
 
     for model_name, parameters in DEFAULT_MODEL_PARAMETERS.items():
         best_version = f"{model_name}-best"
+        lookup_locations = [
+            (best_version, "trained"),
+            (model_name, "trained"),
+            (best_version, "snapshots"),
+            (model_name, "snapshots"),
+        ]
 
-        if not ModelBase.exists(model_name=best_version):
-            print(f"Model {best_version} does not exist locally. Skipping.")
+        for name, location in lookup_locations:
+            if ModelBase.exists(model_name=name, location=location):
+                print(f"Loading Model: {location}/{name}")
+                model, training_state, training_config = ModelBase.load_advanced(model_name=best_version)
+                break
+        else:
+            print(f"Model {model_name} or {best_version} could not be found in the trained or snapshots folder. Skipping.")
             continue
 
-        print(f"Loading Model: {best_version}")
-
-        model, training_state, training_config = ModelBase.load_advanced(model_name=best_version)
         model = model.eval()
-
         model.print_detailed_parameter_counts()
 
-        trainer = ModelTrainerBase.load(model, training_config, training_state)
+        trainer = ModelTrainerBase.load(
+            model,
+            training_config,
+            training_state,
+            overrides=TrainingOverrides(
+                override_batch_limit=1, # Speed up the validation pass below
+            )
+        )
 
         print(f"Latest validation metrics: {trainer.latest_validation_results}")
 

@@ -145,6 +145,9 @@ if __name__ == "__main__":
 
     results = trainer.train()
 
+    model_path = ModelBase.model_path(model_name)
+    best_model_path = ModelBase.model_path(f"{model_name}-best")
+
     if wandb.run is not None and not args.no_upload_artifacts:
         print("Uploading artifacts...")
 
@@ -157,9 +160,6 @@ if __name__ == "__main__":
             "final_train_loss": results.last_training_epoch.average_loss,
             "total_epochs": results.total_epochs,
         }
-        
-        model_path = ModelBase.model_path(model_name)
-        best_model_path = ModelBase.model_path(f"{model_name}-best")
 
         if os.path.exists(model_path):
             upload_model_artifact(

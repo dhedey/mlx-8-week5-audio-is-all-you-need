@@ -174,20 +174,24 @@ class ModelBase(nn.Module):
         return next(self.parameters()).device
     
     @staticmethod
-    def model_path(model_name: str) -> str:
-        model_folder = os.path.join(os.path.dirname(__file__), "saved")
+    def model_path(model_name: str, location: Optional[str] = None) -> str:
+        if location is None:
+            location = "snapshots"
+        assert location == "snapshots" or location == "trained", "ModelBase.model_path only supports 'snapshots' or 'saved' locations"
+        model_folder = os.path.join(os.path.dirname(__file__), location)
         return os.path.join(model_folder, f"{model_name}.pt")
 
     def save_model_data(
             self,
             training_config: TrainingConfig,
             training_state: TrainingState,
+            location: Optional[str] = None,
             file_name: Optional[str] = None,
         ):
         if file_name is None:
             file_name = self.model_name
 
-        model_path = ModelBase.model_path(file_name)
+        model_path = ModelBase.model_path(file_name, location)
         pathlib.Path(os.path.dirname(model_path)).mkdir(parents=True, exist_ok=True)
 
         if training_config.save_only_grad_weights:
@@ -217,20 +221,22 @@ class ModelBase(nn.Module):
     def exists(
         cls,
         model_name: Optional[str] = None,
+        location: Optional[str] = None,
         model_path: Optional[str] = None,
     ) -> bool:
-        return os.path.exists(cls.resolve_path(model_name=model_name, model_path=model_path))
+        return os.path.exists(cls.resolve_path(model_name=model_name, location=location, model_path=model_path))
     
     @classmethod
     def resolve_path(
         cls,
         model_name: Optional[str] = None,
+        location: Optional[str] = None,
         model_path: Optional[str] = None,
     ) -> str:
         if model_path is not None:
             return model_path
         if model_name is not None:
-            return ModelBase.model_path(model_name)
+            return ModelBase.model_path(model_name, location=location)
         raise ValueError("Either model_name or model_path must be provided to load a model.")
 
     @classmethod

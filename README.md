@@ -28,3 +28,13 @@ uv run -m model.start_train
 ```bash
 uv run streamlit run streamlit/app.py
 ```
+
+# Ideas for presentation
+
+* Generating music from a score and style "sing this as a choir"
+* Try to identify / describe the speaker of different segments of audio
+  * Maybe we can find a dataset or splice together dataset annotations
+* Add emotional labels to a dataset
+  * We'd need to find a good dataset
+* Can we have it hear a song sung and output the notes of the track (e.g. in MIDI format)
+  * Maybe we can find an autotuned dataset
