@@ -11,7 +11,7 @@ from torchgen.utils import OrderedSet
 from transformers import WhisperProcessor, WhisperModel
 import torch
 import torchaudio
-from model.harness import datasets_cache_folder
+from model.harness import datasets_cache_folder, select_device, select_device_no_mps
 
 def noop_collate(batch):
     return batch
@@ -106,7 +106,8 @@ def get_whisper() -> tuple[WhisperProcessor, WhisperModel]:
     global _preloaded_whisper
     if _preloaded_whisper is None:
         print("Loading whisper...")
-        _preloaded_whisper = (WhisperProcessor.from_pretrained("openai/whisper-tiny"), WhisperModel.from_pretrained("openai/whisper-tiny"))
+        device = select_device_no_mps()
+        _preloaded_whisper = (WhisperProcessor.from_pretrained("openai/whisper-tiny"), WhisperModel.from_pretrained("openai/whisper-tiny").to(device))
     return _preloaded_whisper
 
 _vctk_speaker_id_mapping = {}
@@ -115,8 +116,12 @@ def prepare_vctk(item):
     global _vctk_speaker_id_mapping
     soundfile = item["flac"]
 
+    # MPS is not supported by Whisper - we get:
+    # > NotImplementedError: Output channels > 65536 not supported at the MPS device.
+    device = select_device_no_mps()
+
     waveform_np, sample_rate = soundfile["array"], soundfile["sampling_rate"]
-    waveform = torch.from_numpy(waveform_np).to(torch.float)
+    waveform = torch.from_numpy(waveform_np).to(torch.float).to(device)
 
     if sample_rate != 16000:
         waveform = torchaudio.functional.resample(waveform, sample_rate, 16000)
@@ -132,11 +137,11 @@ def prepare_vctk(item):
     processor, model = get_whisper()
 
     # Prepare input for Whisper
-    inputs = processor(waveform.numpy(), sampling_rate=sample_rate, return_tensors="pt")
+    inputs = processor(waveform.cpu().numpy(), sampling_rate=sample_rate, return_tensors="pt")
 
     # Get encoder hidden states (embeddings)
     with torch.no_grad():
-        encoder_outputs = model.encoder(inputs.input_features)
+        encoder_outputs = model.encoder(inputs.input_features.to(device))
 
     # encoder_outputs.last_hidden_state shape: [batch, time, hidden_dim]
     # Note: Outputs 50 embeddings / sec, over 30 seconds for a total of 1500

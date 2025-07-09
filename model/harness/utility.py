@@ -23,25 +23,35 @@ class PersistableData(pydantic.BaseModel):
         return cls(**d)
 
 _selected_device = None
+_selected_device_no_mps = None
 
-def select_device_string():
+def _select_device_string():
     if (torch.cuda.is_available()):
         return "cuda"
     elif (torch.backends.mps.is_available()):
         return "mps"
     else:
         return "cpu"
+    
+def _ensure_device_selected():
+    global _selected_device, _selected_device_no_mps
+    if _selected_device is None:
+        device = torch.device(_select_device_string())
+        _selected_device = device
+        if device.type == 'mps':
+            _selected_device_no_mps = torch.device('cpu')
+            print(f'Selected device: {_selected_device} (fallback {_selected_device_no_mps})')
+        else:
+            _selected_device_no_mps = device
+            print(f'Selected device: {_selected_device}')
 
 def select_device():
-    global _selected_device
-    if _selected_device is None:
-        device = torch.device(select_device_string())
-
-        print(f'Selected device: {device}')
-        _selected_device = device
-
+    _ensure_device_selected()
     return _selected_device
 
+def select_device_no_mps():
+    _ensure_device_selected()
+    return _selected_device_no_mps
 
 class ModuleConfig(PersistableData):
     pass
