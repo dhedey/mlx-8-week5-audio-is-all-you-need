@@ -2,6 +2,7 @@
 
 import argparse
 from model.harness import ModelBase, TrainingOverrides, select_device, upload_model_artifact
+from model.harness.utility import force_cpu
 from .project_config import WANDB_PROJECT_NAME, WANDB_ENTITY, DEFINED_MODELS, DEFAULT_MODEL_NAME
 import wandb
 import os
@@ -17,8 +18,6 @@ import os
 #   /artifacts to /trained (nb - we should have a dedicated script for this TBH)
 
 if __name__ == "__main__":
-    device = select_device()
-
     parser = argparse.ArgumentParser(description='Train a model')
     parser.add_argument(
         '--model',
@@ -101,10 +100,18 @@ if __name__ == "__main__":
         action='store_true',
         help='Disable artifact uploading to W&B (if wandb is enabled)'
     )
+    parser.add_argument('--force-cpu', action='store_true', help="Forces the training into CPU mode")
     
     args = parser.parse_args()
 
     model_name = args.model
+
+    _force_cpu = args.force_cpu
+
+    if _force_cpu:
+        force_cpu()
+
+    device = select_device()
 
     if model_name not in DEFINED_MODELS:
         raise ValueError(f"Model '{model_name}' is not defined. The choices are: {list(DEFINED_MODELS.keys())}")

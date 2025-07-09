@@ -75,6 +75,7 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
         # These are already stored in the base class. But setting them again helps the IDE understand their type.
         self.model = model
         self.config = config
+        self.device = next(model.parameters()).device
 
         print(f"Preparing datasets")
 
@@ -93,16 +94,15 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
         print()
 
     def create_dataloader(self, dataset, batch_size, num_workers, collate_fn):
-        device = self.model.get_device()
         # Disable multiprocessing workers only for MPS (Apple Silicon GPU)
-        num_workers = 0 if device.type == 'mps' else num_workers
+        num_workers = 0 if self.device.type == 'mps' else num_workers
 
         return torch.utils.data.DataLoader(
             dataset,
             batch_size=batch_size,
             shuffle=True,
             num_workers=num_workers,
-            pin_memory=self.model.get_device() == 'cuda',
+            pin_memory=self.device.type == 'cuda',
             collate_fn=collate_fn
         )
 
@@ -117,6 +117,11 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
     def process_batch(self, collated_batch) -> BatchResults:
         # model_embeddings: [Batch, Time=1500, OurEmbedding=8]
         # known_speaker_embeddings: [Batch, OurEmbedding=8]
+        if self.device.type == 'mps':
+            collated_batch = {
+                key: tensor.to(self.device) if isinstance(tensor, torch.Tensor) else tensor
+                for key, tensor in collated_batch.items()
+            }
 
         model_embeddings, known_speaker_embeddings = self.model(collated_batch)
 

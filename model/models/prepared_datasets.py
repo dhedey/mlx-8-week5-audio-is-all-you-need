@@ -11,7 +11,7 @@ from torchgen.utils import OrderedSet
 from transformers import WhisperProcessor, WhisperModel
 import torch
 import torchaudio
-from model.harness import datasets_cache_folder, select_device, select_device_no_mps
+from model.harness import datasets_cache_folder, select_device
 
 def noop_collate(batch):
     return batch
@@ -106,7 +106,7 @@ def get_whisper() -> tuple[WhisperProcessor, WhisperModel]:
     global _preloaded_whisper
     if _preloaded_whisper is None:
         print("Loading whisper...")
-        device = select_device_no_mps()
+        device = select_device()
         _preloaded_whisper = (WhisperProcessor.from_pretrained("openai/whisper-tiny"), WhisperModel.from_pretrained("openai/whisper-tiny").to(device))
     return _preloaded_whisper
 
@@ -118,7 +118,7 @@ def prepare_vctk(item):
 
     # MPS is not supported by Whisper - we get:
     # > NotImplementedError: Output channels > 65536 not supported at the MPS device.
-    device = select_device_no_mps()
+    device = select_device()
 
     waveform_np, sample_rate = soundfile["array"], soundfile["sampling_rate"]
     waveform = torch.from_numpy(waveform_np).to(torch.float).to(device)
@@ -178,10 +178,10 @@ def generate_speaker_tagged_dataset():
     get_whisper() # Pre-load Whisper
 
     print("Preparing VCTK training dataset...")
-    train = dataset["train"].filter(every_10th).map(prepare_vctk, remove_columns=dataset["train"].column_names)
+    train = dataset["train"].filter(every_100th).map(prepare_vctk, remove_columns=dataset["train"].column_names)
     _counter = 0
     print("Preparing VCTK validation dataset...")
-    eval = dataset["validation"].filter(every_10th).map(prepare_vctk, remove_columns=dataset["validation"].column_names)
+    eval = dataset["validation"].filter(every_100th).map(prepare_vctk, remove_columns=dataset["validation"].column_names)
 
     return train, eval, len(_vctk_speaker_id_mapping)
 
