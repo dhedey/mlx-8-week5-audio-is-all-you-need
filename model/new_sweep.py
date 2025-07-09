@@ -1,28 +1,21 @@
 #!/usr/bin/env python3
 # Run as uv run -m model.sweep
-"""
-Weights & Biases Hyperparameter Sweep Script
-
-This script programmatically creates and runs wandb sweeps for the dual encoder search model.
-It provides more control over the sweep process compared to the CLI-based approach.
-"""
 
 import wandb
 import os
 
-from .models import DigitSequenceModel, DigitSequenceModelConfig, ImageEncoderConfig, SelfEncoderBlockConfig, DecoderBlockConfig
-from .trainer import DigitSequenceModelTrainer, DigitSequenceModelTrainingConfig
-from .common import select_device, TrainingConfig, TrainingOverrides, ModelBase, upload_model_artifact
+import model.models as models
+from .harness import ModelBase, select_device, upload_model_artifact
 
-from .default_models import WANDB_PROJECT_NAME
+from .project_config import WANDB_PROJECT_NAME
 
 # Sweep configuration - equivalent to wandb_sweep.yaml but in Python
 # https://docs.wandb.ai/guides/sweeps/sweep-config-keys/
 SWEEP_CONFIG = {
     'method': 'bayes',  # Can be 'grid', 'random', or 'bayes'
     'metric': {
-        'name': 'final_validation_loss',
-        'goal': 'minimize'
+        'name': 'validation_objective',
+        'goal': 'maximise'
     },
     'parameters': {
         'encoder_blocks': {
@@ -89,7 +82,7 @@ def train_sweep_run():
             case _:
                 raise ValueError(f"Unknown positional embedding type: {config.positional_embedding}")
 
-        training_config = DigitSequenceModelTrainingConfig(
+        training_config = models.DigitSequenceModelTrainingConfig(
             batch_size=config.batch_size,
             epochs=config.epochs,
             learning_rate=config.learning_rate,
@@ -101,16 +94,16 @@ def train_sweep_run():
         digits_in_height = 2
         max_sequence_length = digits_in_width * digits_in_height + 1  # +1 for the end token
 
-        model_config = DigitSequenceModelConfig(
+        model_config = models.DigitSequenceModelConfig(
             max_sequence_length=max_sequence_length,
-            encoder=ImageEncoderConfig(
+            encoder=models.ImageEncoderConfig(
                 image_width=28 * digits_in_width,
                 image_height=56 * digits_in_height,
                 image_patch_width=7,
                 image_patch_height=7,
                 embedding_dimension=config.embedding_size,
                 encoder_block_count=config.encoder_blocks,
-                encoder_block=SelfEncoderBlockConfig(
+                encoder_block=models.SelfEncoderBlockConfig(
                     kq_dimension=config.kq_size,
                     v_dimension=config.v_size,
                     embedding_dimension=config.embedding_size,
@@ -120,7 +113,7 @@ def train_sweep_run():
                 ),
             ),
             decoder_block_count=config.decoder_blocks,
-            decoder_block=DecoderBlockConfig(
+            decoder_block=models.DecoderBlockConfig(
                 encoder_embedding_dimension=config.embedding_size,
                 decoder_embedding_dimension=config.embedding_size,
 
@@ -141,12 +134,12 @@ def train_sweep_run():
         run_id = wandb.run.id
         model_name = f"sweep-run-{run_id}"
 
-        model = DigitSequenceModel(
+        model = models.DigitSequenceModel(
             model_name=model_name,
             config=model_config,
         )
 
-        trainer = DigitSequenceModelTrainer(model=model.to(device), config=training_config)
+        trainer = models.DigitSequenceModelTrainer(model=model.to(device), config=training_config)
         results = trainer.train()
         
         # Log final metrics

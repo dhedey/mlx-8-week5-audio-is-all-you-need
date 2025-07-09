@@ -1,11 +1,20 @@
 # Run as uv run -m model.start_train
 
 import argparse
-from .common import select_device, ModelBase, upload_model_artifact, TrainingOverrides
-from .default_models import DEFAULT_MODEL_PARAMETERS, DEFAULT_MODEL_NAME
-from .wandb_config import WANDB_PROJECT_NAME, WANDB_ENTITY
+from model.harness import ModelBase, TrainingOverrides, select_device, upload_model_artifact
+from .project_config import WANDB_PROJECT_NAME, WANDB_ENTITY, DEFINED_MODELS, DEFAULT_MODEL_NAME
 import wandb
 import os
+
+# Typical training process:
+#
+# TRAINING:
+# - Run on GPU with --wandb parameter to save to the wandb project
+# - Use model.continue_train if necessary with tweaks to learning-rate / end-epoch
+#
+# PRODUCTIONISING:
+# - Use model.continue_train locally to download the model from wandb and copy it from
+#   /artifacts to /trained (nb - we should have a dedicated script for this TBH)
 
 if __name__ == "__main__":
     device = select_device()
@@ -97,10 +106,10 @@ if __name__ == "__main__":
 
     model_name = args.model
 
-    if model_name not in DEFAULT_MODEL_PARAMETERS:
-        raise ValueError(f"Model '{model_name}' is not defined. The choices are: {list(DEFAULT_MODEL_PARAMETERS.keys())}")
+    if model_name not in DEFINED_MODELS:
+        raise ValueError(f"Model '{model_name}' is not defined. The choices are: {list(DEFINED_MODELS.keys())}")
 
-    parameters = DEFAULT_MODEL_PARAMETERS[model_name]
+    parameters = DEFINED_MODELS[model_name]
 
     if args.wandb:
         run_id = wandb.util.generate_id()
@@ -111,15 +120,16 @@ if __name__ == "__main__":
             name=f"train-{model_name}-{run_id}",
             config={
                 "model_name": model_name,
-                "model_config": parameters["model"].to_dict(),
-                "training_config": parameters["training"].to_dict(),
+                "model_class": parameters.model.__name__,
+                "model_config": parameters.config.to_dict(),
+                "training_config": parameters.training_config.to_dict(),
                 "from_epoch": 0,
             },
         )
 
-    model = parameters["model_class"](
+    model = parameters.model(
         model_name=model_name,
-        config=parameters["model"],
+        config=parameters.config,
     ).to(device)
 
     overrides = TrainingOverrides(
@@ -133,9 +143,9 @@ if __name__ == "__main__":
         seed=args.seed,
         use_dataset_cache=not args.ignore_dataset_cache,
     )
-    trainer = parameters["model_trainer"](
+    trainer = parameters.trainer(
         model=model,
-        config=parameters["training"],
+        config=parameters.training_config,
         overrides=overrides,
     )
 
@@ -153,8 +163,9 @@ if __name__ == "__main__":
 
         artifact_metadata = {
             "model_name": model_name,
-            "model_config": parameters["model"].to_dict(),
-            "training_config": parameters["training"].to_dict(),
+            "model_class": parameters.model.__name__,
+            "model_config": parameters.config.to_dict(),
+            "training_config": parameters.training_config.to_dict(),
             "final_validation_objective": results.last_validation.objective,
             "final_validation_loss": results.last_validation.train_comparable_loss,
             "final_train_loss": results.last_training_epoch.average_loss,

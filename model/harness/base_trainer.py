@@ -1,47 +1,15 @@
-from collections import OrderedDict
-from dataclasses import dataclass
-import torch.optim as optim
-import torch.nn as nn
-import torch
-import os
-import time
-import wandb
-import pathlib
 import inspect
-import re
+import time
+from dataclasses import dataclass
 from typing import Optional, Self
-import pydantic
+
+import torch
+import wandb
 from pydantic import Field
+from torch import optim as optim
 
-class PersistableData(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(
-        use_enum_values=True,
-        # See note here: https://docs.pydantic.dev/latest/api/config/#pydantic.config.ConfigDict.use_enum_values
-        validate_default=True,
-    )
-
-    def to_dict(self) -> dict:
-        return self.model_dump()
-    
-    @classmethod
-    def from_dict(cls, d: dict) -> Self:
-        return cls(**d)
-
-class ModuleConfig(PersistableData):
-    pass
-
-_selected_device = None
-
-def select_device():
-    global _selected_device
-    if _selected_device is None:
-        DEVICE_IF_MPS_SUPPORT = 'cpu' # or 'mps' - but it doesn't work well with EmbeddingBag
-        device = torch.device('cuda' if torch.cuda.is_available() else DEVICE_IF_MPS_SUPPORT if torch.backends.mps.is_available() else 'cpu')
-        
-        print(f'Selected device: {device}')
-        _selected_device = device
-
-    return _selected_device
+from .base_model import ModelBase
+from .utility import PersistableData
 
 class TrainingConfig(PersistableData):
     batch_size: int
@@ -72,6 +40,7 @@ class TrainingConfig(PersistableData):
     early_stopping: bool = False
     early_stopping_patience: int = 5
 
+
 class ValidationResults(PersistableData):
     epoch: int
     train_comparable_loss: float = 0.0 # Default to 0.0 to support backwards compatibility
@@ -97,16 +66,19 @@ class ValidationResults(PersistableData):
         else:
             return 1/self.train_comparable_loss
 
+
 @dataclass
 class BatchResults:
     total_loss: torch.Tensor # Singleton float tensor
     num_samples: int
     intermediates: dict
 
+
 class EpochTrainingResults(PersistableData):
     epoch: int
     average_loss: float
     num_samples: int
+
 
 class FullTrainingResults(PersistableData):
     total_epochs: int
@@ -114,6 +86,7 @@ class FullTrainingResults(PersistableData):
     best_validation: ValidationResults
     last_training_epoch: EpochTrainingResults
     best_training_epoch: EpochTrainingResults
+
 
 class TrainingState(PersistableData):
     epoch: int
@@ -128,6 +101,7 @@ class TrainingState(PersistableData):
     all_validation_results: list[ValidationResults] = Field(default_factory=list) # Default to support backwards compatibility
     scheduler_state: Optional[dict] = None # None to support backwards compatibility
 
+
 class TrainingOverrides(PersistableData):
     override_batch_size: Optional[int] = None
     override_batch_limit: Optional[int] = None
@@ -139,196 +113,6 @@ class TrainingOverrides(PersistableData):
     use_dataset_cache: bool = True
     print_detailed_parameter_counts: bool = False
 
-class ModelBase(nn.Module):
-    registered_types: dict[str, type] = {}
-    config_class: type[ModuleConfig] = ModuleConfig
-
-    def __init__(self, model_name: str, config: ModuleConfig):
-        super().__init__()
-        self.model_name = model_name
-        self.config=config
-
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-
-        # Register the class name in the ModelBase.registered_types dictionary
-        if cls.__name__ in ModelBase.registered_types:
-            raise ValueError(f"Model {cls.__name__} is a duplicate classname. Use a new class name.")
-        ModelBase.registered_types[cls.__name__] = cls
-
-        # Register the config class in cls.config_class
-        init_signature = inspect.signature(cls.__init__)
-        init_params = init_signature.parameters
-
-        if "config" not in init_params:
-            raise ValueError(f"Model {cls.__name__} must have a 'config' parameter in its __init__ method.")
-
-        config_param_class = init_params["config"].annotation
-
-        if not issubclass(config_param_class, ModuleConfig):
-            raise ValueError(f"Model {cls.__name__} has a 'config' parameter in its __init__ method called {config_param_class}, but this class does not derive from ModuleConfig.")
-
-        cls.config_class = config_param_class
-
-    def get_device(self):
-        return next(self.parameters()).device
-    
-    @staticmethod
-    def model_path(model_name: str, location: Optional[str] = None) -> str:
-        if location is None:
-            location = "snapshots"
-        assert location == "snapshots" or location == "trained", "ModelBase.model_path only supports 'snapshots' or 'saved' locations"
-        model_folder = os.path.join(os.path.dirname(__file__), location)
-        return os.path.join(model_folder, f"{model_name}.pt")
-
-    def save_model_data(
-            self,
-            training_config: TrainingConfig,
-            training_state: TrainingState,
-            location: Optional[str] = None,
-            file_name: Optional[str] = None,
-        ):
-        if file_name is None:
-            file_name = self.model_name
-
-        model_path = ModelBase.model_path(file_name, location)
-        pathlib.Path(os.path.dirname(model_path)).mkdir(parents=True, exist_ok=True)
-
-        if training_config.save_only_grad_weights:
-            model_weights = OrderedDict()
-            for name, param in self.named_parameters():
-                if param.requires_grad:
-                    model_weights[name] = param
-        else:
-            model_weights = self.state_dict()
-
-        torch.save({
-            "model": {
-                "class_name": type(self).__name__,
-                "model_name": self.model_name,
-                "weights": model_weights,
-                "config": self.config.to_dict(),
-            },
-            "training": {
-                "config": training_config.to_dict(),
-                "state": training_state.to_dict(),
-            },
-        }, model_path)
-
-        print(f"Model saved to {model_path} (save_only_grad_weights={training_config.save_only_grad_weights})")
-
-    @classmethod
-    def exists(
-        cls,
-        model_name: Optional[str] = None,
-        location: Optional[str] = None,
-        model_path: Optional[str] = None,
-    ) -> bool:
-        return os.path.exists(cls.resolve_path(model_name=model_name, location=location, model_path=model_path))
-    
-    @classmethod
-    def resolve_path(
-        cls,
-        model_name: Optional[str] = None,
-        location: Optional[str] = None,
-        model_path: Optional[str] = None,
-    ) -> str:
-        if model_path is not None:
-            return model_path
-        if model_name is not None:
-            return ModelBase.model_path(model_name, location=location)
-        raise ValueError("Either model_name or model_path must be provided to load a model.")
-
-    @classmethod
-    def load_only_training_state(
-        cls,
-        model_name: Optional[str] = None,
-        model_path: Optional[str] = None,
-    ) -> TrainingState:
-        model_path = cls.resolve_path(model_name=model_name, model_path=model_path)
-        loaded_model_data = torch.load(model_path)
-        return TrainingState.from_dict(loaded_model_data["training"]["state"])
-
-    @classmethod
-    def load_advanced(
-        cls,
-        model_name: Optional[str] = None,
-        override_class_name = None,
-        device: Optional[str] = None,
-        model_path: Optional[str] = None,
-    ) -> tuple[Self, TrainingState, dict]:
-        if device is None:
-            device = select_device()
-
-        model_path = cls.resolve_path(model_name=model_name, model_path=model_path)
-
-        loaded_model_data = torch.load(model_path, map_location=device)
-        print(f"Model data read from {model_path}")
-
-        if model_name is None:
-            model_name = loaded_model_data["model"]["model_name"]
-    
-        loaded_class_name = loaded_model_data["model"]["class_name"]
-        actual_class_name = override_class_name if override_class_name is not None else loaded_class_name
-
-        registered_types = ModelBase.registered_types
-        if actual_class_name not in registered_types:
-            raise ValueError(f"Model class {actual_class_name} is not a known Model. Available classes: {list(registered_types.keys())}")
-        model_class: type[Self] = registered_types[actual_class_name]
-
-        if not issubclass(model_class, cls):
-            raise ValueError(f"The model {model_name} was attempted to be loaded with {cls.__name__}.load(\"{model_name}\") (loaded class name = {loaded_class_name}, override class name = {override_class_name}), but {model_class} is not a subclass of {cls}.")
-
-        model_weights = loaded_model_data["model"]["weights"]
-        model_config = model_class.config_class.from_dict(loaded_model_data["model"]["config"])
-        training_state = TrainingState.from_dict(loaded_model_data["training"]["state"])
-        training_config = loaded_model_data["training"]["config"]
-
-        model: ModelBase = model_class(
-            model_name=model_name,
-            config=model_config,
-        )
-        if training_config.get("save_only_grad_weights", False):
-            model.load_state_dict(model_weights, strict=False)
-        else:
-            model.load_state_dict(model_weights)
-
-        return model.to(device), training_state, training_config
-
-    @classmethod
-    def load_for_evaluation(cls, model_name: Optional[str] = None, model_path: Optional[str] = None, device: Optional[str] = None) -> Self:
-        model, _, _ = cls.load_advanced(model_name=model_name, model_path=model_path, device=device)
-        model.eval()
-        return model
-
-    def print_detailed_parameter_counts(self) -> None:
-        normalized_parameter_counts = {}
-        learnable_weights_count = 0
-        total_weights_count = 0
-        for name, parameter in self.named_parameters():
-            total_weights_count += parameter.numel()
-            if not parameter.requires_grad:
-                continue
-            learnable_weights_count += parameter.numel()
-            normalized_name = re.sub(r'\d+', '*', name)
-            if normalized_name in normalized_parameter_counts:
-                normalized_parameter_counts[normalized_name]["instances"] += 1
-                normalized_parameter_counts[normalized_name]["weights_count"] += parameter.numel()
-            else:
-                normalized_parameter_counts[normalized_name] = {
-                    "instances": 1,
-                    "weights_count": parameter.numel(),
-                }
-        sorted_params = sorted(
-            normalized_parameter_counts.items(),
-            key=lambda item: item[1]["weights_count"],
-            reverse=True
-        )
-        
-        print(f"This {self.__class__.__name__} named \"{self.model_name}\" has {learnable_weights_count:,} learnable weights of {total_weights_count:,} total weights, spread as follows:")
-        for name, params in sorted_params:
-            print(f"- {name}: {params["weights_count"]:,} across {params["instances"]} instances")
-        print()
 
 def create_composite_scheduler(
     optimizer: optim.Optimizer,
@@ -351,6 +135,7 @@ def create_composite_scheduler(
             return optim.lr_scheduler.ChainedScheduler([
                 map_scheduler(scheduler) for scheduler in schedulers
             ])
+
 
 def create_scheduler(
     optimizer: optim.Optimizer,
@@ -389,6 +174,7 @@ def create_scheduler(
         case _:
             raise ValueError(f"Unsupported scheduler type: {scheduler_type}")
 
+
 def create_optimizer(
     model: ModelBase,
     optimizer_name: str,
@@ -407,6 +193,7 @@ def create_optimizer(
             return optim.AdamW(model.parameters(), **optimizer_params)
         case _:
             raise ValueError(f"Unsupported optimizer type: {optimizer_name}")
+
 
 class ModelTrainerBase:
     registered_types: dict[str, type[Self]] = {}
@@ -461,7 +248,7 @@ class ModelTrainerBase:
         if overrides.override_to_epoch is not None:
             self.config.epochs = overrides.override_to_epoch
             print(f"Overriding training end epoch to {self.config.epochs}")
-        
+
         if overrides.override_batch_size is not None:
             self.config.batch_size = overrides.override_batch_size
             print(f"Overriding batch size to {self.config.batch_size}")
@@ -559,11 +346,11 @@ class ModelTrainerBase:
 
     @classmethod
     def load_with_model(cls, model_name: Optional[str] = None, overrides: Optional[TrainingOverrides] = None, device: Optional[str] = None, model_path: Optional[str] = None) -> Self:
-        model, state, config = ModelBase.load_advanced(model_name=model_name, device=device, model_path=model_path)
+        model, state_dict, config_dict = ModelBase.load_advanced(model_name=model_name, device=device, model_path=model_path)
         return cls.load(
             model=model,
-            config=config,
-            state=state,
+            config=config_dict,
+            state=TrainingState.from_dict(state_dict),
             overrides=overrides,
         )
 
@@ -578,7 +365,7 @@ class ModelTrainerBase:
 
         if not issubclass(trainer_class, cls):
             raise ValueError(f"The trainer was attempted to be loaded with {cls.__name__}.load(..) with a trainer class of \"{trainer_class_name}\"), but {trainer_class_name} is not a subclass of {cls}.")
-        
+
         config = trainer_class.config_class.from_dict(config)
 
         trainer = trainer_class(
@@ -621,7 +408,7 @@ class ModelTrainerBase:
 
                     add_prefixed(log_data, self.latest_validation_results.to_dict(), "validation_")
                     add_prefixed(log_data, self.latest_training_results.to_dict(), "train_")
-    
+
                     wandb.log(log_data)
             else:
                 print(f"Skipping validation after epoch {self.epoch} because validate_after_epochs is set to {self.validate_after_epochs}, and it's not the first or last epoch")
@@ -666,7 +453,7 @@ class ModelTrainerBase:
         running_samples = 0
 
         total_batches = len(self.train_data_loader)
-        
+
         start_epoch_time_at = time.time()
 
         if self.config.batch_limit is not None and total_batches >= self.config.batch_limit:
@@ -703,7 +490,8 @@ class ModelTrainerBase:
                 print()
                 print(f"Starting mid-epoch custom validation at batch {batch_num}:")
                 print()
-                self.additional_custom_validation()
+                metrics = self.start_custom_validation()
+                self.finalize_custom_validation(total_samples=0, total_batches=0, custom_validation_metrics=metrics)
 
             if batch_num == total_batches: # Handle self.config.batch_limit
                 break
@@ -838,8 +626,8 @@ class ModelTrainerBase:
         )
         self.model.save_model_data(
             file_name=self.model.model_name,
-            training_config=self.config,
-            training_state=training_state
+            training_config_dict=self.config.to_dict(),
+            training_state_dict=training_state.to_dict(),
         )
 
         if self.latest_validation_results is None:
@@ -851,7 +639,7 @@ class ModelTrainerBase:
         best_validation_epoch = None
         if ModelBase.exists(model_name=best_model_name):
             try:
-                best_training_state = ModelBase.load_only_training_state(model_name=best_model_name)
+                best_training_state = TrainingState.from_dict(ModelBase.load_only_training_state_dict(model_name=best_model_name))
                 best_validation_objective = best_training_state.latest_validation_results.objective
                 best_validation_epoch = best_training_state.latest_validation_results.epoch
             except Exception as e:
@@ -867,46 +655,8 @@ class ModelTrainerBase:
             print(f"The current validation objective {format_optional_float(latest_validation_objective)} is better than the previous best validation objective {format_optional_float(best_validation_objective)} from epoch {best_validation_epoch}, saving as {best_model_name}...")
             self.model.save_model_data(
                 file_name=best_model_name,
-                training_config=self.config,
-                training_state=training_state,
+                training_config_dict=self.config.to_dict(),
+                training_state_dict=training_state.to_dict(),
             )
         else:
             print(f"The current validation objective {format_optional_float(latest_validation_objective)} is not better than the previous best validation objective {format_optional_float(best_validation_objective)} from epoch {best_validation_epoch}, so not saving as best.")
-
-def upload_model_artifact(
-    model_name: str,
-    file_path: str,
-    artifact_name: str,
-    metadata: dict = None,
-    description: str = None
-):
-    """
-    Upload a model as a wandb artifact.
-    
-    Args:
-        model_name: Name of the model. Used for the file name inside the artifact.
-        model_path: Path to the saved model file
-        artifact_name: Optional custom artifact name (defaults to model_name)
-        metadata: Optional metadata dictionary to include with the artifact
-        description: Optional description for the artifact
-    """
-    if not os.path.exists(file_path):
-        print(f"⚠️ Model file not found: {file_path}")
-        return None
-    
-    # Create artifact
-    artifact = wandb.Artifact(
-        name=artifact_name,
-        type="model",
-        description=description or f"Trained model: {model_name}",
-        metadata=metadata or {}
-    )
-    
-    # Add the model file
-    artifact.add_file(file_path, name=f"{model_name}.pt")
-    
-    # Log the artifact
-    wandb.log_artifact(artifact)
-    print(f"📦 Uploaded model artifact: {artifact_name}")
-    
-    return artifact

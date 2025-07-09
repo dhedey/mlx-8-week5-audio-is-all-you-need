@@ -1,9 +1,7 @@
 # Run as uv run -m model.continue_train
 import argparse
-from .default_models import DEFAULT_MODEL_NAME
-from .wandb_config import WANDB_PROJECT_NAME, WANDB_ENTITY
-from .trainer import ModelTrainerBase, TrainingOverrides
-from .common import upload_model_artifact, ModelBase
+from .project_config import WANDB_PROJECT_NAME, WANDB_ENTITY, DEFAULT_MODEL_NAME
+from .harness import TrainingOverrides, ModelTrainerBase, ModelBase, upload_model_artifact
 import wandb
 import os
 

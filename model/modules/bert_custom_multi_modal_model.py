@@ -1,23 +1,11 @@
-from dataclasses import dataclass
-import PIL.Image
-import torch.nn.functional as F
-import torch.nn as nn
 import torch
-import re
-import os
-import statistics
 import transformers
-import random
-import einops
-import pandas as pd
 import math
-import PIL
-from typing import Optional, Self, Any
-from peft import LoraConfig, TaskType, get_peft_model
+from typing import Any
 
 from .multi_modal_model import MultiModalModel, SpecialTokenIds
 from .image_encoders import ClipImageEncoder, ClipImageEncoderConfig, ImageEncoderBase
-from ..common import ModuleConfig
+from ..harness import ModuleConfig
 from .decoder import DecoderLayers, DecoderLayersConfig, DecoderBlockConfig
 
 class BertMultiModalModelConfig(ModuleConfig):

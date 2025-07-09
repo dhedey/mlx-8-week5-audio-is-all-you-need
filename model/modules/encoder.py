@@ -1,11 +1,7 @@
-import torch.nn.functional as F
 import torch.nn as nn
-import torch
-import einops
-import math
-from typing import Optional, Self
+from typing import Optional
 from .transformer import UnmaskedAttentionConfig, UnmaskedAttention, MultiLayerPerceptron
-from ..common import ModuleConfig, Field
+from model.harness import ModuleConfig
 
 class SelfEncoderBlockConfig(ModuleConfig):
     kq_dimension: int

@@ -1,14 +1,11 @@
-import torch.nn.functional as F
 import torch.nn as nn
 import torch
 import einops
-import math
 import PIL
-from typing import Optional, Self
 import transformers
 from .encoder import SelfEncoderBlock, SelfEncoderBlockConfig
-from .transformer import UnmaskedAttentionConfig, UnmaskedAttention, MultiLayerPerceptron
-from ..common import ModuleConfig, Field
+from ..harness import ModuleConfig
+
 
 class PatchEmbedder(nn.Module):
     def __init__(

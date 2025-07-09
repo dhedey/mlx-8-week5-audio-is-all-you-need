@@ -1,11 +1,8 @@
-import torch.nn.functional as F
 import torch.nn as nn
 import torch
-import einops
-import math
-from typing import Optional, Self
-from .transformer import MaskedSelfAttentionConfig, MaskedSelfAttention, UnmaskedAttentionConfig, UnmaskedAttention, MultiLayerPerceptron
-from ..common import ModuleConfig, Field
+from .transformer import MaskedSelfAttentionConfig, MaskedSelfAttention, MultiLayerPerceptron
+from ..harness import ModuleConfig
+
 
 class DecoderBlockConfig(ModuleConfig):
     embedding_dimension: int
