@@ -36,6 +36,7 @@ class UrbanSoundClassifierModelTrainer(ModelTrainerBase):
 
         # These are already stored in the base class. But setting them again helps the IDE understand their type.
         self.model = model
+        self.device = next(model.parameters()).device
         self.config = config
 
         validation_fold = 1
@@ -48,8 +49,8 @@ class UrbanSoundClassifierModelTrainer(ModelTrainerBase):
         print(f"Training set size: {len(train_dataset)}")
         print(f"Test set size: {len(eval_dataset)}")
 
-        self.train_loader = self.create_dataloader(train_dataset, self.config.batch_size, 2, model.collate)
-        self.test_loader = self.create_dataloader(eval_dataset, self.config.batch_size, 2, model.collate)
+        self.train_loader = self.create_dataloader(train_dataset, self.config.batch_size, num_workers=0, collate_fn=model.collate)
+        self.test_loader = self.create_dataloader(eval_dataset, self.config.batch_size, num_workers=0, collate_fn=model.collate)
 
         print()
 
@@ -72,6 +73,12 @@ class UrbanSoundClassifierModelTrainer(ModelTrainerBase):
         return self.test_loader
 
     def process_batch(self, collated_batch) -> BatchResults:
+        # Move batch to the same device as the model
+        collated_batch = {
+            key: tensor.to(self.device) if isinstance(tensor, torch.Tensor) else tensor
+            for key, tensor in collated_batch.items()
+        }
+        
         num_samples = len(collated_batch["labels"])
         logits = self.model(collated_batch)      # (Batch, Classes) => Logits
         label_indices = collated_batch["labels"] # (Batch) => Class index
