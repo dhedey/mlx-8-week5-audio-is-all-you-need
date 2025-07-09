@@ -75,7 +75,7 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
         # These are already stored in the base class. But setting them again helps the IDE understand their type.
         self.model = model
         self.config = config
-        self.device = next(model.parameters()).device
+        self.device = self.model.get_device()
 
         print(f"Preparing datasets")
 
