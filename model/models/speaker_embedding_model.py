@@ -118,6 +118,12 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
         # model_embeddings: [Batch, Time=1500, OurEmbedding=8]
         # known_speaker_embeddings: [Batch, OurEmbedding=8]
 
+        model_device = self.model.get_device()
+        collated_batch = {
+            key: value.to(model_device) if isinstance(value, torch.Tensor) else value
+            for key, value in collated_batch.items()
+        }
+
         model_embeddings, known_speaker_embeddings = self.model(collated_batch)
 
         # TODO: Tweak to only take the mean over the time-interval from the original data clip
