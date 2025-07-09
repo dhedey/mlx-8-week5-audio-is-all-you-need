@@ -468,8 +468,14 @@ class ModelTrainerBase:
 
         epoch_loss = 0.0
         epoch_samples = 0
-        loader = tqdm(self.train_data_loader, desc=f"Epoch {self.epoch}/{self.config.epochs}, Batch 1/{total_batches}, Recent Avg Loss: 0.000")
+        breaking = False
+        loader = tqdm(self.train_data_loader, total=total_batches, desc=f"Epoch {self.epoch}/{self.config.epochs}, Batch 1/{total_batches}, Recent Avg Loss: 0.000")
         for batch_idx, raw_batch in enumerate(loader):
+            # nasty but tqdm does not like early breaks.
+            if breaking:
+                break
+            batch_num = batch_idx + 1
+            
             self.optimizer.zero_grad()
             batch_results = self.process_batch(raw_batch)
 
@@ -482,7 +488,10 @@ class ModelTrainerBase:
             loss.backward()
             self.optimizer.step()
 
-            batch_num = batch_idx + 1
+            if batch_num == total_batches:
+                loader.update(1) # 100%
+                loader.refresh()
+
             if batch_num % print_every == 0 or batch_num == total_batches:
                 loader.set_description(f"Epoch {self.epoch}/{self.config.epochs}, Batch: {batch_num}/{total_batches}, Recent Avg Loss: {(running_loss / running_samples):.3g}")
                 running_loss = 0.0
@@ -496,8 +505,8 @@ class ModelTrainerBase:
                 self.finalize_custom_validation(total_samples=0, total_batches=0, custom_validation_metrics=metrics)
 
             if batch_num == total_batches: # Handle self.config.batch_limit
-                break
-
+                breaking = True
+        
         average_loss = epoch_loss / epoch_samples if epoch_samples > 0 else 0.0
         training_time = time.time() - start_epoch_time_at
         print()
@@ -540,8 +549,12 @@ class ModelTrainerBase:
         custom_validation_metrics = self.start_custom_validation()
         total_loss = 0.0
         total_samples = 0
-        loader = tqdm(self.validation_data_loader, desc=f"Validation batch: 1/{total_batches}, Recent Avg Loss: 0.0000")
+        breaking = False
+        loader = tqdm(self.validation_data_loader, total=total_batches, desc=f"Validation batch: 1/{total_batches}, Recent Avg Loss: 0.0000")
         for batch_idx, raw_batch in enumerate(loader):
+            if breaking:
+                break
+
             batch_results = self.process_batch(raw_batch)
 
             loss = batch_results.total_loss
@@ -565,7 +578,7 @@ class ModelTrainerBase:
                 running_samples = 0
 
             if batch_num == total_batches:  # Handle self.config.batch_limit
-                break
+                breaking = True
 
         average_loss = total_loss / total_samples if total_samples > 0 else 0.0
 
