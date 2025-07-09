@@ -1,9 +1,11 @@
-from .harness import PersistableData, ModelBase, ModuleConfig, TrainingConfig, ModelTrainerBase
+from .harness import PersistableData, ModelBase, ModuleConfig, TrainingConfig, ModelTrainerBase, WandbArgumentsHelper
 import model.models as models
 import torch
 
-WANDB_ENTITY = "david-edey-machine-learning-institute"
-WANDB_PROJECT_NAME = "week5-audio-is-all-you-need"
+WANDB_ARGUMENTS_HELPER = WandbArgumentsHelper(
+    default_entity="david-edey-machine-learning-institute",
+    default_project="week5-audio-is-all-you-need",
+)
 
 has_cuda = torch.cuda.is_available()
 

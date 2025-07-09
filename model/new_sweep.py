@@ -5,7 +5,7 @@ import wandb
 import os
 
 import model.models as models
-from .harness import ModelBase, select_device, upload_model_artifact
+from .harness import ModelBase, select_device, WandbHelper
 
 from .project_config import WANDB_PROJECT_NAME
 
@@ -172,8 +172,8 @@ def train_sweep_run():
                 
                 # Upload final model
                 if os.path.exists(model_path):
-                    upload_model_artifact(
-                        model_name=model_name,
+                    WandbHelper.upload_model_artifact(
+                        artifact_file_name=model_name,
                         file_path=model_path,
                         artifact_name=f"model-{run_id}",
                         metadata=artifact_metadata,
@@ -184,8 +184,8 @@ def train_sweep_run():
                 if os.path.exists(best_model_path):
                     best_metadata = artifact_metadata.copy()
                     best_metadata["model_type"] = "best_validation"
-                    upload_model_artifact(
-                        model_name=model_name,
+                    WandbHelper.upload_model_artifact(
+                        artifact_file_name=model_name,
                         file_path=best_model_path,
                         artifact_name=f"model-{run_id}-best",
                         metadata=best_metadata,

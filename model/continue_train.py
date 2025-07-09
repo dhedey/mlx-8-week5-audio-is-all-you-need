@@ -1,7 +1,7 @@
 # Run as uv run -m model.continue_train
 import argparse
 from .project_config import WANDB_PROJECT_NAME, WANDB_ENTITY, DEFAULT_MODEL_NAME
-from .harness import TrainingOverrides, ModelTrainerBase, ModelBase, upload_model_artifact
+from .harness import TrainingOverrides, ModelTrainerBase, ModelBase, WandbHelper
 import wandb
 import os
 
@@ -210,7 +210,7 @@ if __name__ == "__main__":
 
         model_name = trainer.model.model_name
 
-        if use_wandb and wandb.run is None:
+        if use_wandb and z is None:
             # Start a new W&B run for the continued training
             new_run_id = wandb.util.generate_id()
 
@@ -258,8 +258,8 @@ if __name__ == "__main__":
             best_model_path = ModelBase.model_path(f"{model_name}-best")
 
             if os.path.exists(model_path):
-                upload_model_artifact(
-                    model_name=model_name,
+                WandbHelper.upload_model_artifact(
+                    artifact_file_name=model_name,
                     file_path=model_path,
                     artifact_name=f"{model_name}-final",
                     metadata=artifact_metadata,
@@ -269,8 +269,8 @@ if __name__ == "__main__":
             if os.path.exists(best_model_path):
                 best_metadata = artifact_metadata.copy()
                 best_metadata["model_type"] = "best_validation"
-                upload_model_artifact(
-                    model_name=model_name,
+                WandbHelper.upload_model_artifact(
+                    artifact_file_name=model_name,
                     file_path=best_model_path,
                     artifact_name=f"{model_name}-best",
                     metadata=best_metadata,
