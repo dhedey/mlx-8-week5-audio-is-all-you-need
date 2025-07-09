@@ -17,6 +17,22 @@ class ModelDefinition(PersistableData):
 # * The first in this list is the default model
 # * Others can be run with --model <model_name>
 DEFINED_MODELS: dict[str, ModelDefinition] = {
+    "speaker-embedding-two-towers-basic": ModelDefinition(
+        model=models.SpeakerEmbeddingTwoTowers,
+        config=models.SpeakerEmbeddingTwoTowersConfig(
+            total_speakers=319,
+            target_embedding_dimension=8,
+            whisper_embedding_dimension=384,
+        ),
+        trainer=models.SpeakerEmbeddingModelTrainer,
+        training_config=TrainingConfig(
+            batch_size=16,
+            epochs=5,
+            print_after_batches=1,
+            learning_rate=0.0005,
+            optimizer="adamw",
+        ),
+    ),
     "urban-sound-classifier-patch-transformer-v1": ModelDefinition(
         model=models.PatchTransformerUrbanSoundClassifierModel,
         config=models.PatchTransformerUrbanSoundClassifierModelConfig(

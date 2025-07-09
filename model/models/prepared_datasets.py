@@ -7,6 +7,11 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from typing import Optional
 
+from torchgen.utils import OrderedSet
+from transformers import WhisperProcessor, WhisperModel
+import torch
+import torchaudio
+
 def noop_collate(batch):
     return batch
 
@@ -96,5 +101,79 @@ def generate_urban_classifier_dataset(validation_fold: int, num_mels: Optional[i
 
     return train_dataset, eval_dataset
 
+_preloaded_whisper = None
+
+def get_whisper() -> tuple[WhisperProcessor, WhisperModel]:
+    global _preloaded_whisper
+    if _preloaded_whisper is None:
+        print("Loading whisper...")
+        _preloaded_whisper = (WhisperProcessor.from_pretrained("openai/whisper-tiny"), WhisperModel.from_pretrained("openai/whisper-tiny"))
+    return _preloaded_whisper
+
+_vctk_speaker_id_mapping = {}
+
+def prepare_vctk(item):
+    global _vctk_speaker_id_mapping
+    soundfile = item["flac"]
+
+    waveform_np, sample_rate = soundfile["array"], soundfile["sampling_rate"]
+    waveform = torch.from_numpy(waveform_np).to(torch.float)
+
+    if sample_rate != 16000:
+        waveform = torchaudio.functional.resample(waveform, sample_rate, 16000)
+        sample_rate = 16000
+
+    # Whisper expects mono audio
+    if waveform.shape[0] > 1:
+       waveform = waveform.mean(dim=0, keepdim=True)
+
+    # TODO: Add in randomization of the audio
+
+    # Load model and processor
+    processor, model = get_whisper()
+
+    # Prepare input for Whisper
+    inputs = processor(waveform.numpy(), sampling_rate=sample_rate, return_tensors="pt")
+
+    # Get encoder hidden states (embeddings)
+    with torch.no_grad():
+        encoder_outputs = model.encoder(inputs.input_features)
+
+    # encoder_outputs.last_hidden_state shape: [batch, time, hidden_dim]
+    # Note: Outputs 50 embeddings / sec, over 30 seconds for a total of 1500
+    whisper_embedding = encoder_outputs.last_hidden_state  # This is the sequence of embeddings
+
+    speaker_id = item["speaker_id"]
+    if speaker_id not in _vctk_speaker_id_mapping:
+        _vctk_speaker_id_mapping[speaker_id] = len(_vctk_speaker_id_mapping)
+
+    speaker_index = _vctk_speaker_id_mapping[speaker_id]
+
+    return {
+        "whisper_embedding": whisper_embedding, # [batch, time, hidden_dim]
+        "speaker_index": speaker_index,
+    }
+
+_counter = 0
+def every_100th(item):
+    global _counter
+    is_included = (_counter % 100 == 0)
+    _counter += 1
+    return is_included
+
+def generate_speaker_tagged_dataset():
+    data_folder = os.path.join(os.path.dirname(__file__), "datasets")
+    dataset = datasets.load_dataset("badayvedat/VCTK", cache_dir=data_folder)
+
+    get_whisper() # Pre-load Whisper
+
+    eval = dataset["validation"].filter(every_100th).map(prepare_vctk, remove_columns=dataset["validation"].column_names)
+    _counter = 0
+    train = dataset["train"].filter(every_100th).map(prepare_vctk, remove_columns=dataset["train"].column_names)
+
+    return train, eval, len(_vctk_speaker_id_mapping)
+
+
 if __name__ == "__main__":
-    generate_urban_classifier_dataset(1)
+    generate_speaker_tagged_dataset()
+    # generate_urban_classifier_dataset(1)
