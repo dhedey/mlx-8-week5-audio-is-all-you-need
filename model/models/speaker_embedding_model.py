@@ -93,6 +93,10 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
         print()
 
     def create_dataloader(self, dataset, batch_size, num_workers, collate_fn):
+        device = self.model.get_device()
+        # Disable multiprocessing workers only for MPS (Apple Silicon GPU)
+        num_workers = 0 if device.type == 'mps' else num_workers
+
         return torch.utils.data.DataLoader(
             dataset,
             batch_size=batch_size,
