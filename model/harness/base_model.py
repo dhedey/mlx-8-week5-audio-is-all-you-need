@@ -47,9 +47,8 @@ class ModelBase(nn.Module):
     def model_path(model_name: str, location: Optional[str] = None) -> str:
         if location is None:
             location = "snapshots"
-        assert location == "snapshots" or location == "trained", "ModelBase.model_path only supports 'snapshots' or 'saved' locations"
-        model_folder = os.path.join(os.path.dirname(__file__), location)
-        return os.path.join(model_folder, f"{model_name}.pt")
+        assert location == "snapshots" or location == "trained", "ModelBase.model_path only supports 'snapshots' or 'trained' locations"
+        return os.path.join(os.path.dirname(__file__), "..", location, f"{model_name}.pt")
 
     def save_model_data(
             self,

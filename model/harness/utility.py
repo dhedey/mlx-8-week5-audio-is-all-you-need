@@ -5,6 +5,9 @@ import pydantic
 import torch
 import wandb
 
+def datasets_cache_folder():
+    os.path.join(os.path.dirname(__file__), "..", "datasets")
+
 class PersistableData(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(
         use_enum_values=True,

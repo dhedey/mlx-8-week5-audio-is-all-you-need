@@ -11,6 +11,7 @@ from torchgen.utils import OrderedSet
 from transformers import WhisperProcessor, WhisperModel
 import torch
 import torchaudio
+from model.harness import datasets_cache_folder
 
 def noop_collate(batch):
     return batch
@@ -83,13 +84,11 @@ def urbansound8K_prepare_v2(dataset_item, num_mels: Optional[int] = None, total_
     }
 
 def generate_urban_classifier_dataset(validation_fold: int, num_mels: Optional[int] = None, total_time_frames: Optional[int] = None):
-    data_folder = os.path.join(os.path.dirname(__file__), "datasets")
-
     assert 1 <= validation_fold <= 10
 
     dataset = datasets.load_dataset(
         "danavery/urbansound8K",
-        cache_dir=data_folder,
+        cache_dir=datasets_cache_folder(),
         # It only comes with one split "train" but advises we do cross validation based on the fold
         split="train",
     )
@@ -168,8 +167,7 @@ def every_10th(item):
     return is_included
 
 def generate_speaker_tagged_dataset():
-    data_folder = os.path.join(os.path.dirname(__file__), "datasets")
-    dataset = datasets.load_dataset("badayvedat/VCTK", cache_dir=data_folder)
+    dataset = datasets.load_dataset("badayvedat/VCTK", cache_dir=datasets_cache_folder())
 
     get_whisper() # Pre-load Whisper
 
