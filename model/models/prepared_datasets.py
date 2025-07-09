@@ -172,13 +172,16 @@ def every_10th(item):
     return is_included
 
 def generate_speaker_tagged_dataset():
+    global _counter
     dataset = datasets.load_dataset("badayvedat/VCTK", cache_dir=datasets_cache_folder())
 
     get_whisper() # Pre-load Whisper
 
-    eval = dataset["validation"].filter(every_10th).map(prepare_vctk, remove_columns=dataset["validation"].column_names)
-    _counter = 0
+    print("Preparing VCTK training dataset...")
     train = dataset["train"].filter(every_10th).map(prepare_vctk, remove_columns=dataset["train"].column_names)
+    _counter = 0
+    print("Preparing VCTK validation dataset...")
+    eval = dataset["validation"].filter(every_10th).map(prepare_vctk, remove_columns=dataset["validation"].column_names)
 
     return train, eval, len(_vctk_speaker_id_mapping)
 

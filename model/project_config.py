@@ -26,7 +26,7 @@ DEFINED_MODELS: dict[str, ModelDefinition] = {
         ),
         trainer=models.SpeakerEmbeddingModelTrainer,
         training_config=TrainingConfig(
-            batch_size=16,
+            batch_size=32,
             epochs=5,
             print_after_batches=1,
             learning_rate=0.0005,
