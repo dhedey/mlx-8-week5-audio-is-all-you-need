@@ -7,6 +7,7 @@ import torch
 import wandb
 from pydantic import Field
 from torch import optim as optim
+from tqdm.auto import tqdm
 
 from .base_model import ModelBase
 from .utility import PersistableData
@@ -467,7 +468,8 @@ class ModelTrainerBase:
 
         epoch_loss = 0.0
         epoch_samples = 0
-        for batch_idx, raw_batch in enumerate(self.train_data_loader):
+        loader = tqdm(self.train_data_loader, desc=f"Epoch {self.epoch}/{self.config.epochs}, Batch 1/{total_batches}, Recent Avg Loss: 0.000")
+        for batch_idx, raw_batch in enumerate(loader):
             self.optimizer.zero_grad()
             batch_results = self.process_batch(raw_batch)
 
@@ -482,10 +484,10 @@ class ModelTrainerBase:
 
             batch_num = batch_idx + 1
             if batch_num % print_every == 0 or batch_num == total_batches:
-                print(f"Epoch {self.epoch}/{self.config.epochs}, Batch {batch_num}/{total_batches}, Recent Avg Loss: {(running_loss / running_samples):.3g}")
+                loader.set_description(f"Epoch {self.epoch}/{self.config.epochs}, Batch: {batch_num}/{total_batches}, Recent Avg Loss: {(running_loss / running_samples):.3g}")
                 running_loss = 0.0
                 running_samples = 0
-
+                
             if custom_validate_every is not None and batch_num % custom_validate_every == 0:
                 print()
                 print(f"Starting mid-epoch custom validation at batch {batch_num}:")
@@ -538,7 +540,8 @@ class ModelTrainerBase:
         custom_validation_metrics = self.start_custom_validation()
         total_loss = 0.0
         total_samples = 0
-        for batch_idx, raw_batch in enumerate(self.validation_data_loader):
+        loader = tqdm(self.validation_data_loader, desc=f"Validation batch: 1/{total_batches}, Recent Avg Loss: 0.0000")
+        for batch_idx, raw_batch in enumerate(loader):
             batch_results = self.process_batch(raw_batch)
 
             loss = batch_results.total_loss
@@ -557,7 +560,7 @@ class ModelTrainerBase:
             )
 
             if batch_num % print_every == 0 or batch_num == total_batches:
-                print(f"Validation batch {batch_num}/{total_batches}, Recent Avg Loss: {(running_loss / running_samples):.3g}")
+                loader.set_description(f"Validation batch: {batch_num}/{total_batches}, Recent Avg Loss: {(running_loss / running_samples):.3g}")
                 running_loss = 0.0
                 running_samples = 0
 

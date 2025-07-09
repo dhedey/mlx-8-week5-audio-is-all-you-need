@@ -14,12 +14,12 @@ def resample_and_trim_or_pad(soundfile, target_sample_rate, target_num_samples) 
     soundfile_array, sample_rate = soundfile["array"], soundfile["sampling_rate"]
 
     if soundfile_array.ndim == 1:
-        waveform = torch.from_numpy(soundfile_array).to(torch.float).unsqueeze(0)  # [1, time]
+        waveform = torch.from_numpy(soundfile_array).to(torch.float32).unsqueeze(0)  # [1, time]
     else:
-        waveform = torch.from_numpy(soundfile_array).to(torch.float).T  # [channels, time]
+        waveform = torch.from_numpy(soundfile_array).to(torch.float32).T  # [channels, time]
 
     if sample_rate != target_sample_rate:
-        resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=target_sample_rate)
+        resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=target_sample_rate).to('cpu')
         waveform = resampler(waveform)
 
     # Trim or pad
@@ -29,7 +29,7 @@ def resample_and_trim_or_pad(soundfile, target_sample_rate, target_num_samples) 
     elif num_samples < target_num_samples:
         waveform = F.pad(waveform, (0, target_num_samples - num_samples))
 
-    return waveform
+    return waveform.to('cpu')
 
 def urbansound8K_prepare_v2(dataset_item, num_mels: Optional[int] = None, total_time_frames: Optional[int] = None):
     if num_mels is None:
@@ -40,11 +40,6 @@ def urbansound8K_prepare_v2(dataset_item, num_mels: Optional[int] = None, total_
 
     FIXED_LENGTH_SECONDS = 4
 
-    # We want that:
-    # * total_samples = sample_rate * 4 seconds
-    # * total_samples = 200 * (total_time_frames - 1) + 400
-    # sample_rate = ((total_time_frames - 1) * 200 + 400) / 4
-
     target_num_samples = 200 * (total_time_frames - 1) # + 400
     target_sample_rate = target_num_samples // FIXED_LENGTH_SECONDS
 
@@ -54,21 +49,12 @@ def urbansound8K_prepare_v2(dataset_item, num_mels: Optional[int] = None, total_
         target_num_samples=target_num_samples,
     )
 
-    # We have:
-    # * total_samples = 4s * 16000 samples / second
-    # * n_fft = 400                          (the number of samples for the fft)
-    # * window_length = n_fft = 400          (the number of samples for each window)
-    # * hop_length = window_size / 2 = 200   (the stride / num of samples between each window)
-    #
-    # So we end up with the following number of time buckets:
-    # 1 + (total_samples - window_length) / hop_length = 1 + (4 * 16000 - 400) / 200 = 319
-    # ALTHOUGH it looks like it's actually:
-    # 1 + total_samples / hop_length = 1 + (4 * 16000) / 200 = 321
     transform = torchaudio.transforms.MelSpectrogram(
         sample_rate=target_sample_rate,
         n_mels=num_mels,
-    )
+    ).to('cpu')  # Ensure transform is on CPU
     spectrogram = transform(waveform)
+    spectrogram = spectrogram.to('cpu')
 
     expected_shape = (1, num_mels, total_time_frames) # 1 = channel
     assert spectrogram.shape == expected_shape, f"Expected spectrogram to have shape {expected_shape}, but got {spectrogram.shape}"
