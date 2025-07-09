@@ -21,11 +21,18 @@ class PersistableData(pydantic.BaseModel):
 
 _selected_device = None
 
+def select_device_string():
+    if (torch.cuda.is_available()):
+        return "cuda"
+    elif (torch.backends.mps.is_available()):
+        return "mps"
+    else:
+        return "cpu"
+
 def select_device():
     global _selected_device
     if _selected_device is None:
-        DEVICE_IF_MPS_SUPPORT = 'cpu' # or 'mps' - but it doesn't work well with EmbeddingBag
-        device = torch.device('cuda' if torch.cuda.is_available() else DEVICE_IF_MPS_SUPPORT if torch.backends.mps.is_available() else 'cpu')
+        device = torch.device(select_device_string())
 
         print(f'Selected device: {device}')
         _selected_device = device
