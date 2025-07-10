@@ -7,8 +7,8 @@ if __name__ == "__main__":
     for model_name in DEFINED_MODELS.keys():
         best_version = f"{model_name}-best"
         lookup_locations = [
-            (best_version, "trained"),
-            (model_name, "trained"),
+            # (best_version, "trained"),
+            # (model_name, "trained"),
             (best_version, "snapshots"),
             (model_name, "snapshots"),
         ]
@@ -62,7 +62,7 @@ if __name__ == "__main__":
                     (waveform_pt.numpy(), sample_rate)
                 ]).to(model.get_device())
                 embedding = embedding_model.single_mean_embedding_over_time_interval(
-                    whisper_embedding,
+                    whisper_embedding.squeeze(0),
                     length_seconds,
                 ).detach().cpu().numpy()
                 embeddings.append(embedding)

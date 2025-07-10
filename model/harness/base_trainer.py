@@ -446,7 +446,6 @@ class ModelTrainerBase:
                 validation_average_train_loss = self.latest_validation_results.train_comparable_loss
                 validation_objective = self.latest_validation_results.objective
                 overfitting_measure = (validation_average_train_loss - train_average_loss) / validation_average_train_loss if validation_average_train_loss > 0 else float('inf')
-                best_objective = self.best_validation_results.objective
 
                 if previous_validation_results is not None:
                     validation_change = f" ({loss_change_description(previous_validation_results.train_comparable_loss, validation_average_train_loss)})"
@@ -457,11 +456,13 @@ class ModelTrainerBase:
                 if previous_best_validation_results is None or previous_best_validation_results.epoch == self.epoch:
                     print(f"> Validation Objective: {validation_objective:#.3g} [RECORD]")
                 else:
-                    improvement = (best_objective - previous_best_validation_results.objective) / previous_best_validation_results.objective
+                    improvement = (validation_objective - previous_best_validation_results.objective) / previous_best_validation_results.objective
                     last_best_epochs_ago = self.epoch - previous_best_validation_results.epoch
                     pluralised_epochs = "epoch" if last_best_epochs_ago == 1 else "epochs"
-                    if best_objective >= previous_best_validation_results.objective:
+                    if validation_objective > previous_best_validation_results.objective:
                         print(f"> Validation Objective: {validation_objective:#.3g} ({improvement:.2%} better than {last_best_epochs_ago} {pluralised_epochs} ago) [RECORD]")
+                    elif validation_objective == previous_best_validation_results.objective:
+                        print(f"> Validation Objective: {validation_objective:#.3g} (Equal to {last_best_epochs_ago} {pluralised_epochs} ago)")
                     else:
                         print(f"> Validation Objective: {validation_objective:#.3g} ({(-improvement):.2%} worse than {last_best_epochs_ago} {pluralised_epochs} ago)")
             else:

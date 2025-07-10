@@ -2,6 +2,7 @@ import torch.nn as nn
 import torch
 import numpy as np
 import einops
+import math
 
 from model.harness import ModelBase, ModuleConfig, BatchResults, ModelTrainerBase, TrainingConfig, TrainingState, TrainingOverrides, select_device_no_mps
 from .prepared_datasets import generate_speaker_tagged_dataset
@@ -49,33 +50,9 @@ class SpeakerEmbeddingTwoTowers(ModelBase):
             "start_offsets_ms": start_offsets_ms,
             "end_offsets_ms": end_offsets_ms,
         }
-    
-    def single_mean_embedding_over_time_interval(self, whisper_embedding, length_seconds):
-        return self.mean_embedding_over_time_interval(
-            whisper_embeddings=whisper_embedding.unsqueeze(0),  # Add batch dimension
-            start_offsets_ms=torch.tensor([0], dtype=torch.long),
-            end_offsets_ms=torch.tensor([(length_seconds * 1000)//1], dtype=torch.long),
-        ).squeeze(0)
-
-    def mean_embedding_over_time_interval(self, whisper_embeddings, start_offsets_ms, end_offsets_ms) -> torch.Tensor:
-        model_embeddings = self.speaker_embedding_model(whisper_embeddings)
-
-        batch_size, time_size, embed_size = model_embeddings.shape
-
-        mask = torch.zeros(batch_size, time_size, dtype=torch.long, device=model_embeddings.device)
-        
-        for row_mask, start_offset_ms, end_offset_ms in zip(mask, start_offsets_ms, end_offsets_ms):
-            frame_rate = 50 # From whisper encodings
-            start_offset = (start_offset_ms * frame_rate) // 1000
-            end_offset = (end_offset_ms * frame_rate) // 1000
-            row_mask[start_offset:end_offset] = 1
-
-        mask_repeated = einops.repeat(mask, 'batch time -> batch time embed', embed = embed_size)
-        # (Batch, Time, Embedding)
-        return (mask_repeated * model_embeddings).sum(dim=1) / mask_repeated.sum(dim=1)
 
     def forward(self, collated_batch) -> tuple[torch.Tensor, torch.Tensor]:
-        mean_embedding = self.mean_embedding_over_time_interval(
+        mean_embedding = self.speaker_embedding_model.mean_embedding_over_time_interval(
             collated_batch["whisper_embeddings"],
             collated_batch["start_offsets_ms"],
             collated_batch["end_offsets_ms"],
@@ -100,6 +77,33 @@ class SpeakerEmbeddingModel(ModelBase):
             [soundfile_to_whisper_embedding(soundfile) for soundfile in soundfiles],
             dim = 0 # Batch dimension
         )
+    
+    def single_mean_embedding_over_time_interval(self, whisper_embedding, length_seconds):
+        return self.mean_embedding_over_time_interval(
+            whisper_embeddings=whisper_embedding.unsqueeze(0),  # Add batch dimension
+            start_offsets_ms=torch.tensor([0], dtype=torch.long),
+            end_offsets_ms=torch.tensor([(length_seconds * 1000)//1], dtype=torch.long),
+        ).squeeze(0)
+
+    def mean_embedding_over_time_interval(self, whisper_embeddings, start_offsets_ms, end_offsets_ms) -> torch.Tensor:
+        frame_rate = 50 # From whisper encodings
+
+        # Speed up model by slicing the inputs
+        max_offset = max((end_offset_ms.item() * frame_rate) // 1000 for end_offset_ms in end_offsets_ms)
+        model_embeddings = self(whisper_embeddings[:, :max_offset, :])
+
+        batch_size, time_size, embed_size = model_embeddings.shape
+
+        mask = torch.zeros(batch_size, time_size, dtype=torch.long, device=model_embeddings.device)
+        
+        for row_mask, start_offset_ms, end_offset_ms in zip(mask, start_offsets_ms, end_offsets_ms):
+            start_offset = (start_offset_ms * frame_rate) // 1000
+            end_offset = (end_offset_ms * frame_rate) // 1000
+            row_mask[start_offset:end_offset] = 1
+
+        mask_repeated = einops.repeat(mask, 'batch time -> batch time embed', embed = embed_size)
+        # (Batch, Time, Embedding)
+        return (mask_repeated * model_embeddings).sum(dim=1) / mask_repeated.sum(dim=1)
 
     def forward(self, whisper_embeddings: torch.Tensor) -> torch.Tensor:
         return self.fc1(whisper_embeddings)
