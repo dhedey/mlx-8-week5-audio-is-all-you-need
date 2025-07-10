@@ -1,4 +1,5 @@
 import torch.nn as nn
+import torch.nn.functional as F
 import torch
 import numpy as np
 import einops
@@ -41,7 +42,13 @@ class SpeakerEmbeddingTwoTowers(ModelBase):
                     )
                 )
             case LayeredSpeakerEmbeddingConfig():
-                raise NotImplementedError("LayeredSpeakerEmbeddingModel is not implemented yet.")
+                self.speaker_embedding_model = LayeredSpeakerEmbeddingModel(
+                    model_name=self.config.inner_model_name,
+                    config=LayeredSpeakerEmbeddingModelConfig(
+                        whisper_embedding_dimension=self.config.whisper_embedding_dimension,
+                        target_embedding_dimension=self.config.target_embedding_dimension,
+                    )
+                )
             case _:
                 raise ValueError(f"Unknown embedding model configuration: {self.config.embedding_model}")
 
@@ -129,12 +136,47 @@ class LinearSpeakerEmbeddingModel(SpeakerEmbeddingModel):
     def forward(self, whisper_embeddings: torch.Tensor) -> torch.Tensor:
         return self.fc1(whisper_embeddings)
 
+class LayeredSpeakerEmbeddingModelConfig(ModuleConfig):
+    whisper_embedding_dimension: int
+    target_embedding_dimension: int
+
+class LayeredSpeakerEmbeddingModel(SpeakerEmbeddingModel):
+    def __init__(self, model_name: str, config: LayeredSpeakerEmbeddingModelConfig):
+        super().__init__(model_name=model_name, config=config)
+        self.config = config
+        d_in = config.whisper_embedding_dimension
+        d_mid = config.target_embedding_dimension * 2
+        d_out = config.target_embedding_dimension
+        # MLP: linear -> ReLU -> BN -> dropout -> linear
+        self.fc1 = nn.Linear(d_in, d_mid)
+        self.act1 = nn.ReLU(inplace=True)
+        self.bn = nn.BatchNorm1d(d_mid)
+        self.drop2 = nn.Dropout(0.3)
+        self.fc2 = nn.Linear(d_mid, d_out)
+
+    def forward(self, whisper_embeddings: torch.Tensor) -> torch.Tensor:
+        # whisper_embeddings: [B, T, d_in]
+        x = self.fc1(whisper_embeddings)           # [B, T, d_mid]
+        x = self.act1(x)
+        # BN over channels: reshape to [B*T, d_mid]
+        B, T, C = x.shape
+        x = x.view(B * T, C)
+        x = self.bn(x)
+        x = x.view(B, T, C)
+        x = self.drop2(x)
+        x = self.fc2(x)                           # [B, T, d_out]
+        # L2 normalize per time-step
+        x = F.normalize(x, p=2, dim=-1)
+        return x
+
+class SpeakerEmbeddingTrainingConfig(TrainingConfig):
+    loss_kind: Literal["triplet", "david"] = "david"
 
 class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
     def __init__(
             self,
             model: SpeakerEmbeddingTwoTowers,
-            config: TrainingConfig,
+            config: SpeakerEmbeddingTrainingConfig,
             overrides: Optional[TrainingOverrides] = None,
             continuation: Optional[TrainingState] = None,
         ):
@@ -194,37 +236,42 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
             key: value.to(model_device) if isinstance(value, torch.Tensor) else value
             for key, value in collated_batch.items()
         }
+        batch_size = len(collated_batch["whisper_embeddings"])
 
         mean_model_embeddings, known_speaker_embeddings = self.model(collated_batch)
-        batch_size = len(mean_model_embeddings)
 
         assert mean_model_embeddings.shape == (batch_size, self.model.config.target_embedding_dimension)
 
         ### ?! The model embeddings are almost the same for almost all audios
-        # These appear to be 0 on Cuda???
-        # print(mean_model_embeddings)
+        ### The model embeddings appear to be 0 on Cuda???
 
-        margin = 0.85
+        match self.config.loss_kind:
+            case "david":
+                margin = 0.85
+                # Does the model's embedding align with the actual speaker embedding?
+                positive_contribution = torch.nn.CosineSimilarity(dim=-1)(mean_model_embeddings, known_speaker_embeddings)
 
-        # TODO: Possibly tweak to use proper triplet loss??
+                # Does the model's embedding align with other speakers?
+                negative_contributions = []
+                for speaker_embedding in self.model.known_speaker_embedding.weight:
+                    repeated_speaker_embedding = speaker_embedding.repeat(batch_size, 1)
+                    negative_contributions.append(
+                        torch.nn.CosineSimilarity(dim=-1)(mean_model_embeddings, repeated_speaker_embedding)
+                    )
+                negative_contributions = torch.stack(negative_contributions) # (EachSpeaker, Batch)
+                negative_contribution = negative_contributions.mean(dim=0)   # (Batch)
 
-        # Does the model's embedding align with the actual speaker embedding?
-        positive_contribution = torch.nn.CosineSimilarity(dim=-1)(mean_model_embeddings, known_speaker_embeddings)
-
-        # Does the model's embedding align with all speakers?
-        batch_size = len(positive_contribution)
-
-        # Now look across each speaker embedding we have and try to move away from it
-        negative_contributions = []
-        for speaker_embedding in self.model.known_speaker_embedding.weight:
-            repeated_speaker_embedding = speaker_embedding.repeat(batch_size, 1)
-            negative_contributions.append(
-                torch.nn.CosineSimilarity(dim=-1)(mean_model_embeddings, repeated_speaker_embedding)
-            )
-        negative_contributions = torch.stack(negative_contributions) # (EachSpeaker, Batch)
-        negative_contribution = negative_contributions.mean(dim=0)   # (Batch)
-
-        total_loss = torch.max(torch.tensor(0), margin - positive_contribution + negative_contribution).sum(dim=0)
+                total_loss = torch.max(torch.tensor(0), margin - positive_contribution + negative_contribution).sum(dim=0)
+            case "triplet":
+                device = self.model.get_device()
+                all_indices = torch.arange(batch_size, device=device)
+                neg_indices = (all_indices + torch.randint(1, batch_size, (batch_size,), device=device)) % batch_size
+                known_embs_neg = known_speaker_embeddings[neg_indices]
+                # compute triplet loss: anchor=mean_model_embs, pos=known_embs_pos, neg=known_embs_neg
+                triplet_loss = nn.TripletMarginLoss(margin=0.3, p=2)
+                total_loss = triplet_loss(mean_model_embeddings, known_speaker_embeddings, known_embs_neg)
+            case _:
+                raise ValueError(f"Unknown loss function {self.config.loss_kind}")
 
         return BatchResults(
             total_loss=total_loss,
