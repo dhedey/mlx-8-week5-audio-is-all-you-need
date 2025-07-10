@@ -41,7 +41,17 @@ uv run streamlit run streamlit/app.py
 
 ## Todo list:
 
-* Learn a "silence" speaker (speaker embedding)
-* Speaker change detection:
-    * Dataset: ?? Spliced?
-    * 
+* Optimize our embedding model:
+  * Use different dataset
+  * Use more complicated model
+    * MLP => Andy
+    * Conv => ??
+  * Trial using mel-spectrogram instead of whisper encodings
+  * Use better loss function (David)
+    * Don't average the embedding before computing similarities
+    * Average over time
+    * Arcface instead of averaging
+* Learn a "silence" speaker somehow?
+* Speaker change detection (Mel) 
+  * Dataset: ?? Spliced?
+  * Model ??

@@ -31,26 +31,54 @@ class SpeakerEmbeddingTwoTowers(ModelBase):
         whisper_embeddings = torch.cat([
             torch.tensor(item["whisper_embedding"], dtype=torch.float) for item in dataset_batch
         ])
+        start_offsets_ms = torch.tensor([
+            item["start_offset_ms"] for item in dataset_batch
+        ], dtype=torch.long)
+        end_offsets_ms = torch.tensor([
+            item["end_offset_ms"] for item in dataset_batch
+        ], dtype=torch.long)
         speaker_indices = torch.tensor([
             item["speaker_index"] for item in dataset_batch
         ], dtype=torch.long)
 
+
         return {
             "whisper_embeddings": whisper_embeddings,
             "speaker_indices": speaker_indices,
+            "start_offsets_ms": start_offsets_ms,
+            "end_offsets_ms": end_offsets_ms,
         }
+    
+    def single_mean_embedding_over_time_interval(self, whisper_embedding, length_seconds):
+        return self.mean_embedding_over_time_interval(
+            whisper_embeddings=whisper_embedding.unsqueeze(0),  # Add batch dimension
+            start_offsets_ms=torch.tensor([0], dtype=torch.long),
+            end_offsets_ms=torch.tensor([(length_seconds * 1000)//1], dtype=torch.long),
+        ).squeeze(0)
 
-    def mean_embedding_over_time_interval(self, start_ms, end_ms) -> torch.Tensor:
-        raise NotImplementedError("")
+    def mean_embedding_over_time_interval(self, whisper_embeddings, start_offsets_ms, end_offsets_ms) -> torch.Tensor:
+        model_embeddings = self.speaker_embedding_model(whisper_embeddings)
+
+        batch_size, time_size = model_embeddings.shape
+        mask = torch.zeros(batch_size, time_size)
+        for row_mask, start_offset_ms, end_offset_ms in zip(mask, start_offsets_ms, end_offsets_ms):
+            frame_rate = 50 # From whisper encodings
+            start_offset = (start_offset_ms * frame_rate) // 1000
+            end_offset = (end_offset_ms * frame_rate) // 1000
+            row_mask[start_offset:end_offset] = 1
+
+        # (Batch, Time, Embedding), so dim=1 is a mean over time
+        return (mask * model_embeddings).sum(dim=1) / mask.sum(dim=1)
 
     def forward(self, collated_batch) -> tuple[torch.Tensor, torch.Tensor]:
-        model_embeddings = self.speaker_embedding_model(collated_batch["whisper_embeddings"])
+        mean_embedding = self.mean_embedding_over_time_interval(
+            collated_batch["whisper_embeddings"],
+            collated_batch["start_offsets_ms"],
+            collated_batch["end_offsets_ms"],
+        )
         known_speaker_embeddings = self.known_speaker_embedding(collated_batch["speaker_indices"])
 
-        return model_embeddings, known_speaker_embeddings
-
-    def average_speaker_embedding(self) -> torch.Tensor:
-        return self.known_speaker_embedding.weight.mean(dim=0)
+        return mean_embedding, known_speaker_embeddings
 
 
 class SpeakerEmbeddingModelConfig(ModuleConfig):
@@ -157,9 +185,16 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
 
         # Does the model's embedding align with all speakers?
         batch_size = len(positive_contribution)
-        average_speaker_embedding = self.model.average_speaker_embedding().repeat(batch_size, 1)
 
-        negative_contribution = torch.nn.CosineSimilarity(dim=-1)(mean_model_embeddings, average_speaker_embedding)
+        # Now look across each speaker embedding we have and try to move away from it
+        negative_contributions = []
+        for speaker_embedding in self.model.known_speaker_embedding.weight:
+            repeated_speaker_embedding = speaker_embedding.repeat(batch_size, 1)
+            negative_contributions.append(
+                torch.nn.CosineSimilarity(dim=-1)(mean_model_embeddings, repeated_speaker_embedding)
+            )
+        negative_contributions = torch.stack(negative_contributions) # (EachSpeaker, Batch)
+        negative_contribution = negative_contributions.mean(dim=0)   # (Batch)
 
         total_loss = torch.max(torch.tensor(0), margin - positive_contribution + negative_contribution).sum(dim=0)
 

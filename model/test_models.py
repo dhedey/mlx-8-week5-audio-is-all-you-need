@@ -57,10 +57,14 @@ if __name__ == "__main__":
                 print(f"Processing {file_name}")
                 file_path = os.path.join(os.path.dirname(__file__), "samples", file_name)
                 waveform_pt, sample_rate = torchaudio.load(file_path)
+                length_seconds = waveform_pt.shape[-1] / sample_rate
                 whisper_embedding = embedding_model.process([
                     (waveform_pt.numpy(), sample_rate)
                 ]).to(model.get_device())
-                embedding = embedding_model(whisper_embedding).detach().mean(dim=1).squeeze(0).cpu().numpy()
+                embedding = embedding_model.single_mean_embedding_over_time_interval(
+                    whisper_embedding,
+                    length_seconds,
+                ).detach().cpu().numpy()
                 embeddings.append(embedding)
                 speakers.append(speaker)
                 labels.append(context)

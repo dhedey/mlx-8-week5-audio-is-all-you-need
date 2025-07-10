@@ -148,11 +148,12 @@ def soundfile_to_whisper_embedding(soundfile: tuple[np.ndarray, int]):
     return whisper_embedding
 
 
-def prepare_vctk(item):
+def prepare_vctk_v2(item):
     global _vctk_speaker_id_mapping
     soundfile = item["flac"]
 
     whisper_embedding = soundfile_to_whisper_embedding((soundfile["array"], soundfile["sampling_rate"]))
+    length_ms = (1000 * soundfile["array"].shape[-1]) // soundfile["sampling_rate"]
 
     speaker_id = item["speaker_id"]
     if speaker_id not in _vctk_speaker_id_mapping:
@@ -163,6 +164,8 @@ def prepare_vctk(item):
     return {
         "whisper_embedding": whisper_embedding, # [batch, time, hidden_dim]
         "speaker_index": speaker_index,
+        "start_offset_ms": 0,
+        "end_offset_ms": length_ms,
     }
 
 _counter = 0
@@ -185,14 +188,16 @@ def generate_speaker_tagged_dataset():
     get_whisper() # Pre-load Whisper
 
     print("Preparing VCTK training dataset...")
-    train = dataset["train"].filter(every_10th).map(prepare_vctk, remove_columns=dataset["train"].column_names)
+    train = dataset["train"].filter(every_10th).map(prepare_vctk_v2, remove_columns=dataset["train"].column_names)
     _counter = 0
     print("Preparing VCTK validation dataset...")
-    eval = dataset["validation"].filter(every_10th).map(prepare_vctk, remove_columns=dataset["validation"].column_names)
+    eval = dataset["validation"].filter(every_10th).map(prepare_vctk_v2, remove_columns=dataset["validation"].column_names)
 
     return train, eval, len(_vctk_speaker_id_mapping)
 
 
 if __name__ == "__main__":
-    generate_speaker_tagged_dataset()
+    dataset = datasets.load_dataset("badayvedat/VCTK", cache_dir=datasets_cache_folder())
+    _ignored = dataset["train"].map(prepare_vctk_v2, remove_columns=dataset["train"].column_names)
+    # generate_speaker_tagged_dataset()
     # generate_urban_classifier_dataset(1)
