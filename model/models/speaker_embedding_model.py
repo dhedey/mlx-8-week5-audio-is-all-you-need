@@ -3,30 +3,48 @@ import torch
 import numpy as np
 import einops
 import math
+import pydantic
 
 from model.harness import ModelBase, ModuleConfig, BatchResults, ModelTrainerBase, TrainingConfig, TrainingState, TrainingOverrides, select_device_no_mps
 from .prepared_datasets import generate_speaker_tagged_dataset
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 from .prepared_datasets import soundfile_to_whisper_embedding
+
+class LinearSpeakerEmbeddingConfig(ModuleConfig):
+    model_kind: Literal["linear"] = "linear"
+
+class LayeredSpeakerEmbeddingConfig(ModuleConfig):
+    model_kind: Literal["layered"] = "layered"
 
 class SpeakerEmbeddingTwoTowersConfig(ModuleConfig):
     total_speakers: int # 109 in badayvedat/VCTK
     target_embedding_dimension: int
     whisper_embedding_dimension: int
     inner_model_name: str = "speaker-embedding"
+    embedding_model: Optional[LinearSpeakerEmbeddingConfig | LayeredSpeakerEmbeddingConfig] = pydantic.Field(discriminator='model_kind', default=None)
 
 class SpeakerEmbeddingTwoTowers(ModelBase):
     def __init__(self, model_name: str, config: SpeakerEmbeddingTwoTowersConfig):
         super().__init__(model_name=model_name, config=config)
         self.config = config
 
-        self.speaker_embedding_model = SpeakerEmbeddingModel(
-            model_name=self.config.inner_model_name,
-            config=SpeakerEmbeddingModelConfig(
-                whisper_embedding_dimension=self.config.whisper_embedding_dimension,
-                target_embedding_dimension=self.config.target_embedding_dimension,
-            )
-        )
+        if self.config.embedding_model is None:
+            self.config.embedding_model = LinearSpeakerEmbeddingConfig()
+
+        match self.config.embedding_model:
+            case LinearSpeakerEmbeddingConfig():
+                self.speaker_embedding_model = LinearSpeakerEmbeddingModel(
+                    model_name=self.config.inner_model_name,
+                    config=LinearSpeakerEmbeddingModelConfig(
+                        whisper_embedding_dimension=self.config.whisper_embedding_dimension,
+                        target_embedding_dimension=self.config.target_embedding_dimension,
+                    )
+                )
+            case LayeredSpeakerEmbeddingConfig():
+                raise NotImplementedError("LayeredSpeakerEmbeddingModel is not implemented yet.")
+            case _:
+                raise ValueError(f"Unknown embedding model configuration: {self.config.embedding_model}")
+
         self.known_speaker_embedding = nn.Embedding(config.total_speakers, config.target_embedding_dimension)
 
     def collate(self, dataset_batch) -> dict:
@@ -60,17 +78,10 @@ class SpeakerEmbeddingTwoTowers(ModelBase):
         known_speaker_embeddings = self.known_speaker_embedding(collated_batch["speaker_indices"])
 
         return mean_embedding, known_speaker_embeddings
-
-
-class SpeakerEmbeddingModelConfig(ModuleConfig):
-    whisper_embedding_dimension: int
-    target_embedding_dimension: int
-
+    
 class SpeakerEmbeddingModel(ModelBase):
-    def __init__(self, model_name: str, config: SpeakerEmbeddingModelConfig):
+    def __init__(self, model_name: str, config: ModuleConfig):
         super().__init__(model_name=model_name, config=config)
-        self.config = config
-        self.fc1 = nn.Linear(config.whisper_embedding_dimension, config.target_embedding_dimension, bias=False)
 
     def process(self, soundfiles: list[tuple[np.ndarray, int]]) -> torch.Tensor:
         return torch.cat(
@@ -105,6 +116,16 @@ class SpeakerEmbeddingModel(ModelBase):
         # (Batch, Time, Embedding)
         return (mask_repeated * model_embeddings).sum(dim=1) / mask_repeated.sum(dim=1)
 
+class LinearSpeakerEmbeddingModelConfig(ModuleConfig):
+    whisper_embedding_dimension: int
+    target_embedding_dimension: int
+
+class LinearSpeakerEmbeddingModel(SpeakerEmbeddingModel):
+    def __init__(self, model_name: str, config: LinearSpeakerEmbeddingModelConfig):
+        super().__init__(model_name=model_name, config=config)
+        self.config = config
+        self.fc1 = nn.Linear(config.whisper_embedding_dimension, config.target_embedding_dimension, bias=False)
+
     def forward(self, whisper_embeddings: torch.Tensor) -> torch.Tensor:
         return self.fc1(whisper_embeddings)
 
@@ -122,6 +143,9 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
         # These are already stored in the base class. But setting them again helps the IDE understand their type.
         self.model = model
         self.config = config
+
+        import datasets
+        datasets.config.IN_MEMORY_MAX_SIZE = 2 * 1024 * 1024 # 2GB
 
         print(f"Preparing datasets")
 

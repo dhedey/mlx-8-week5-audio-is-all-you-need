@@ -23,6 +23,7 @@ DEFINED_MODELS: dict[str, ModelDefinition] = {
             total_speakers=319,
             target_embedding_dimension=8,
             whisper_embedding_dimension=384,
+            embedding_model=models.LinearSpeakerEmbeddingConfig()
         ),
         trainer=models.SpeakerEmbeddingModelTrainer,
         training_config=TrainingConfig(
