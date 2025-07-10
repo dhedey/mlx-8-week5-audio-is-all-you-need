@@ -515,11 +515,13 @@ class ModelTrainerBase:
         batch_num = 0
         start_epoch_time_at = time.time()
 
+        batch_limit = "" if self.config.batch_limit is None else f", batch_limit={self.config.batch_limit}"
+        print(f"Beginning training (batch_size={self.config.batch_size}{batch_limit})")
+
         def loader_description():
             recent_loss = f"{recent_avg_loss:#.3g}" if recent_avg_loss is not None else "-N/A-"
             avg_loss = f"{(epoch_loss / epoch_samples):#.3g}" if epoch_samples > 0 else "-N/A-"
-            batch_limit = "" if self.config.batch_limit is None else f", batch_limit={self.config.batch_limit}"
-            return f"Training {batch_num}/{total_batches} (batch_size={self.config.batch_size}{batch_limit}) | Avg Loss: {avg_loss} | Recent Loss: {recent_loss}"
+            return f"Training batch {batch_num}/{total_batches} | Loss avg={avg_loss} recent={recent_loss}"
 
         loader = tqdm(islice(self.train_data_loader, total_batches), total=total_batches, desc=loader_description())
 
@@ -589,11 +591,13 @@ class ModelTrainerBase:
 
         batch_num = 0
 
+        batch_limit = "" if self.config.batch_limit is None else f", batch_limit={self.config.batch_limit}"
+        print(f"Beginning validation (batch_size={self.config.batch_size}{batch_limit})")
+
         def loader_description():
             recent_loss = f"{recent_avg_loss:#.3g}" if recent_avg_loss is not None else "-N/A-"
             avg_loss = f"{(total_loss / total_samples):#.3g}" if total_samples > 0 else "-N/A-"
-            batch_limit = "" if self.config.batch_limit is None else f", batch_limit={self.config.batch_limit}"
-            return f"Validation {batch_num}/{total_batches} (batch_size={self.config.batch_size}{batch_limit}) | Avg Loss: {avg_loss} | Recent Loss: {recent_loss}"
+            return f"Validation batch {batch_num}/{total_batches} | Loss avg={avg_loss} recent={recent_loss}"
 
         loader = tqdm(islice(self.validation_data_loader, total_batches), total=total_batches, desc=loader_description())
 
