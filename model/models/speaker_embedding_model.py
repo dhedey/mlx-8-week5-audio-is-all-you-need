@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch
 import numpy as np
+import einops
 
 from model.harness import ModelBase, ModuleConfig, BatchResults, ModelTrainerBase, TrainingConfig, TrainingState, TrainingOverrides, select_device_no_mps
 from .prepared_datasets import generate_speaker_tagged_dataset
@@ -59,16 +60,19 @@ class SpeakerEmbeddingTwoTowers(ModelBase):
     def mean_embedding_over_time_interval(self, whisper_embeddings, start_offsets_ms, end_offsets_ms) -> torch.Tensor:
         model_embeddings = self.speaker_embedding_model(whisper_embeddings)
 
-        batch_size, time_size = model_embeddings.shape
-        mask = torch.zeros(batch_size, time_size)
+        batch_size, time_size, embed_size = model_embeddings.shape
+
+        mask = torch.zeros(batch_size, time_size, dtype=torch.long, device=model_embeddings.device)
+        
         for row_mask, start_offset_ms, end_offset_ms in zip(mask, start_offsets_ms, end_offsets_ms):
             frame_rate = 50 # From whisper encodings
             start_offset = (start_offset_ms * frame_rate) // 1000
             end_offset = (end_offset_ms * frame_rate) // 1000
             row_mask[start_offset:end_offset] = 1
 
-        # (Batch, Time, Embedding), so dim=1 is a mean over time
-        return (mask * model_embeddings).sum(dim=1) / mask.sum(dim=1)
+        mask_repeated = einops.repeat(mask, 'batch time -> batch time embed', embed = embed_size)
+        # (Batch, Time, Embedding)
+        return (mask_repeated * model_embeddings).sum(dim=1) / mask_repeated.sum(dim=1)
 
     def forward(self, collated_batch) -> tuple[torch.Tensor, torch.Tensor]:
         mean_embedding = self.mean_embedding_over_time_interval(
@@ -163,13 +167,9 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
             for key, value in collated_batch.items()
         }
 
-        model_embeddings, known_speaker_embeddings = self.model(collated_batch)
-        batch_size = len(model_embeddings)
+        mean_model_embeddings, known_speaker_embeddings = self.model(collated_batch)
+        batch_size = len(mean_model_embeddings)
 
-        # TODO: Tweak to only take the mean over the time-interval from the original data clip
-
-        # Average over the time dimension
-        mean_model_embeddings = model_embeddings.mean(dim=1)
         assert mean_model_embeddings.shape == (batch_size, self.model.config.target_embedding_dimension)
 
         ### ?! The model embeddings are almost the same for almost all audios
@@ -200,7 +200,7 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
 
         return BatchResults(
             total_loss=total_loss,
-            num_samples=len(model_embeddings),
+            num_samples=batch_size,
             intermediates={}
         )
     
