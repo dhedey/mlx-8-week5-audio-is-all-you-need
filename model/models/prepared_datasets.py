@@ -179,51 +179,6 @@ def every_10th(item):
     _counter += 1
     return is_included
 
-
-# def generate_speaker_tagged_dataset(cache_dir="datasets/vctk_processed"):
-#     # 1. Check if processed cache exists
-
-#     cache_dir = os.path.join(os.path.dirname(__file__), '..', cache_dir)
-
-#     try:
-#         print(f"Loading processed dataset from cache: {cache_dir}")
-#         dataset = load_from_disk(cache_dir)
-#         train, eval = dataset["train"], dataset["validation"]
-#         # Optionally: restore any mappings you need
-#         return train, eval, len(train)  # or however you count speakers
-#     except Exception as e:
-#         try:
-#             artifact = wandb.Artifact(
-#     name="my-dataset-artifact",   # unique, descriptive
-#     type="dataset",               # e.g. "dataset", "model", etc.
-#     description="Raw images and labels"
-# )
-
-#             wandb.Artifact.download(cache_dir)
-#         except Exception as e:
-#             print(f"Error logging in to wandb: {e}")
-#             print("Skipping wandb logging...")
-
-#         print(f"Error loading dataset from cache: {e}")
-#         print("Recreating cache...")
-#         pass
-
-#     # 2. Download and process if not cached
-#     print("Downloading and processing VCTK dataset...")
-#     raw_dataset = load_dataset("badayvedat/VCTK", cache_dir="data/hf_raw_cache")
-#     # ... your processing steps here ...
-#     train = raw_dataset["train"].filter(every_10th).map(prepare_vctk, remove_columns=raw_dataset["train"].column_names)
-#     eval = raw_dataset["validation"].filter(every_10th).map(prepare_vctk, remove_columns=raw_dataset["validation"].column_names)
-
-#     # 3. Save processed dataset to disk for future use
-#     processed = DatasetDict({"train": train, "validation": eval})
-#     processed.save_to_disk(cache_dir)
-#     print(f"Saved processed dataset to cache: {cache_dir}")
-
-#     wandb.add_dir(cache_dir)
-
-#     return train, eval, len(train)  
-
 def generate_speaker_tagged_dataset(
     cache_dir: str = "datasets/vctk_processed",
     raw_cache_dir: str = "datasets/vctk_raw",
@@ -252,7 +207,7 @@ def generate_speaker_tagged_dataset(
         print(f"Loading processed dataset from local cache: {cache_dir}")
         ds = load_from_disk(cache_dir)
         train, valid = ds["train"], ds["validation"]
-        return train, valid, len(train)
+        return train, valid, 0
     except Exception:
         print("Local cache miss.")
 
@@ -297,7 +252,7 @@ def generate_speaker_tagged_dataset(
         wandb.log_artifact(artifact)
         print(f"✅ Logged processed dataset as `{artifact_name}:latest`")
 
-    return train, eval, len(train)  
+    return train, eval, 0  
 
 if __name__ == "__main__":
     generate_speaker_tagged_dataset()
