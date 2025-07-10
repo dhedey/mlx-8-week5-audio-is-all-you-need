@@ -134,7 +134,8 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
         assert mean_model_embeddings.shape == (batch_size, self.model.config.target_embedding_dimension)
 
         ### ?! The model embeddings are almost the same for almost all audios
-        print(mean_model_embeddings)
+        # These appear to be 0 on Cuda???
+        # print(mean_model_embeddings)
 
         margin = 0.7
 
