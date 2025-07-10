@@ -7,13 +7,14 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from typing import Optional, Any
 import numpy as np
+from datasets import load_dataset, load_from_disk, DatasetDict
 
 from torchgen.utils import OrderedSet
 from transformers import WhisperProcessor, WhisperModel
 import torch
 import torchaudio
 from model.harness import datasets_cache_folder, select_device, select_device_no_mps
-
+import wandb
 def noop_collate(batch):
     return batch
 
@@ -178,20 +179,125 @@ def every_10th(item):
     _counter += 1
     return is_included
 
-def generate_speaker_tagged_dataset():
-    global _counter
-    dataset = datasets.load_dataset("badayvedat/VCTK", cache_dir=datasets_cache_folder())
 
-    get_whisper() # Pre-load Whisper
+# def generate_speaker_tagged_dataset(cache_dir="datasets/vctk_processed"):
+#     # 1. Check if processed cache exists
 
-    print("Preparing VCTK training dataset...")
-    train = dataset["train"].filter(every_10th).map(prepare_vctk, remove_columns=dataset["train"].column_names)
-    _counter = 0
-    print("Preparing VCTK validation dataset...")
-    eval = dataset["validation"].filter(every_10th).map(prepare_vctk, remove_columns=dataset["validation"].column_names)
+#     cache_dir = os.path.join(os.path.dirname(__file__), '..', cache_dir)
 
-    return train, eval, len(_vctk_speaker_id_mapping)
+#     try:
+#         print(f"Loading processed dataset from cache: {cache_dir}")
+#         dataset = load_from_disk(cache_dir)
+#         train, eval = dataset["train"], dataset["validation"]
+#         # Optionally: restore any mappings you need
+#         return train, eval, len(train)  # or however you count speakers
+#     except Exception as e:
+#         try:
+#             artifact = wandb.Artifact(
+#     name="my-dataset-artifact",   # unique, descriptive
+#     type="dataset",               # e.g. "dataset", "model", etc.
+#     description="Raw images and labels"
+# )
 
+#             wandb.Artifact.download(cache_dir)
+#         except Exception as e:
+#             print(f"Error logging in to wandb: {e}")
+#             print("Skipping wandb logging...")
+
+#         print(f"Error loading dataset from cache: {e}")
+#         print("Recreating cache...")
+#         pass
+
+#     # 2. Download and process if not cached
+#     print("Downloading and processing VCTK dataset...")
+#     raw_dataset = load_dataset("badayvedat/VCTK", cache_dir="data/hf_raw_cache")
+#     # ... your processing steps here ...
+#     train = raw_dataset["train"].filter(every_10th).map(prepare_vctk, remove_columns=raw_dataset["train"].column_names)
+#     eval = raw_dataset["validation"].filter(every_10th).map(prepare_vctk, remove_columns=raw_dataset["validation"].column_names)
+
+#     # 3. Save processed dataset to disk for future use
+#     processed = DatasetDict({"train": train, "validation": eval})
+#     processed.save_to_disk(cache_dir)
+#     print(f"Saved processed dataset to cache: {cache_dir}")
+
+#     wandb.add_dir(cache_dir)
+
+#     return train, eval, len(train)  
+
+def generate_speaker_tagged_dataset(
+    cache_dir: str = "datasets/vctk_processed",
+    raw_cache_dir: str = "datasets/vctk_raw",
+    artifact_name: str = "vctk-processed-dataset",
+    use_alias: str = "latest",
+):
+    # 0. Check if we're logged in to W&B
+    try:
+        api = wandb.Api()
+        use_wandb = bool(api.api_key)
+    except Exception:
+        use_wandb = False
+
+    if not use_wandb:
+        print("🔒 Not logged into W&B; skipping artifact download & logging.")
+
+    # Resolve cache_dir relative to this file
+    base_path = os.path.dirname(__file__)
+    cache_dir = os.path.abspath(os.path.join(base_path, '..', cache_dir))
+    raw_cache_dir = os.path.abspath(os.path.join(base_path, '..', raw_cache_dir))
+    os.makedirs(cache_dir, exist_ok=True)
+    os.makedirs(raw_cache_dir, exist_ok=True)
+
+    # 1. Try loading existing processed dataset from disk
+    try:
+        print(f"Loading processed dataset from local cache: {cache_dir}")
+        ds = load_from_disk(cache_dir)
+        train, valid = ds["train"], ds["validation"]
+        return train, valid, len(train)
+    except Exception:
+        print("Local cache miss.")
+
+    # 2. If logged in, try fetching the artifact
+    if use_wandb:
+        try:
+            print("Fetching processed dataset from W&B…")
+            artifact_ref = f"{artifact_name}:{use_alias}"
+            print(f"Fetching {artifact_ref} into {cache_dir}…")
+            art = wandb.use_artifact(artifact_ref)
+            download_root = art.download(root=cache_dir)
+            print(f"✅ Artifact downloaded into {download_root}")
+            ds = load_from_disk(download_root)
+            train, valid = ds["train"], ds["validation"]
+            return train, valid, len(train)
+        except Exception as e:
+            print(f"⚠️ Artifact fetch failed: {e}")
+            print("Falling back to local rebuild…")
+    else:
+        print("Skipping W&B fetch; rebuilding locally.")
+
+    # 2. Download and process if not cached
+    print("Downloading and processing VCTK dataset...")
+    raw_dataset = load_dataset("badayvedat/VCTK", cache_dir=raw_cache_dir)
+
+    # ... your processing steps here ...
+    train = raw_dataset["train"].filter(every_10th).map(prepare_vctk, remove_columns=raw_dataset["train"].column_names)
+    eval = raw_dataset["validation"].filter(every_10th).map(prepare_vctk, remove_columns=raw_dataset["validation"].column_names)
+
+    # 3. Save processed dataset to disk for future use
+    processed = DatasetDict({"train": train, "validation": eval})
+    processed.save_to_disk(cache_dir)
+    print(f"Saved processed dataset to cache: {cache_dir}")
+
+    if use_wandb:
+        artifact = wandb.Artifact(
+            name=artifact_name,
+            type="dataset",
+            description="Speaker-tagged VCTK train/validation split"
+        )
+        artifact.add_dir(cache_dir, name=os.path.basename(cache_dir))
+        wandb.log_artifact(artifact)
+        print(f"✅ Logged processed dataset as `{artifact_name}:latest`")
+
+    return train, eval, len(train)  
 
 if __name__ == "__main__":
     generate_speaker_tagged_dataset()

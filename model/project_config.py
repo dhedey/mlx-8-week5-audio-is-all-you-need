@@ -2,7 +2,7 @@ from .harness import PersistableData, ModelBase, ModuleConfig, TrainingConfig, M
 import model.models as models
 import torch
 
-WANDB_ENTITY = "david-edey-machine-learning-institute"
+WANDB_ENTITY = "mlx-bb"
 WANDB_PROJECT_NAME = "week5-audio-is-all-you-need"
 
 has_cuda = torch.cuda.is_available()
@@ -17,6 +17,23 @@ class ModelDefinition(PersistableData):
 # * The first in this list is the default model
 # * Others can be run with --model <model_name>
 DEFINED_MODELS: dict[str, ModelDefinition] = {
+    "speaker-triplet-embedding-basic-two-towers": ModelDefinition(
+        model=models.SpeakerTripletEmbeddingTwoTowers,
+        config=models.SpeakerTripletEmbeddingTwoTowersConfig(
+            total_speakers=319,
+            target_embedding_dimension=8,
+            whisper_embedding_dimension=384,
+        ),
+        trainer=models.SpeakerTripletEmbeddingModelTrainer,
+        training_config=TrainingConfig(
+            batch_size=32,
+            epochs=5,
+            recalculate_running_loss_after_batches=1,
+            learning_rate=0.0005,
+            optimizer="adamw",
+        ),
+    ),
+
     "speaker-embedding-basic-two-towers": ModelDefinition(
         model=models.SpeakerEmbeddingTwoTowers,
         config=models.SpeakerEmbeddingTwoTowersConfig(

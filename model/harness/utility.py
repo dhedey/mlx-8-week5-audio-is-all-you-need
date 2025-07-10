@@ -6,7 +6,7 @@ import torch
 import wandb
 
 def datasets_cache_folder():
-    os.path.join(os.path.dirname(__file__), "..", "datasets")
+    return os.path.join(os.path.dirname(__file__), "..", "datasets")
 
 class PersistableData(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(
@@ -28,8 +28,8 @@ _selected_device_no_mps = None
 def _select_device_string():
     if (torch.cuda.is_available()):
         return "cuda"
-    elif (torch.backends.mps.is_available()):
-        return "mps"
+    # elif (torch.backends.mps.is_available()):
+    #     return "mps"
     else:
         return "cpu"
     

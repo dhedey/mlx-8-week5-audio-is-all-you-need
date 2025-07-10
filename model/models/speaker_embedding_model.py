@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch
 import numpy as np
+import torch.nn.functional as F
 
 from model.harness import ModelBase, ModuleConfig, BatchResults, ModelTrainerBase, TrainingConfig, TrainingState, TrainingOverrides, select_device_no_mps
 from .prepared_datasets import generate_speaker_tagged_dataset
@@ -58,10 +59,24 @@ class SpeakerEmbeddingModelConfig(ModuleConfig):
     target_embedding_dimension: int
 
 class SpeakerEmbeddingModel(ModelBase):
-    def __init__(self, model_name: str, config: SpeakerEmbeddingModelConfig):
+    def __init__(self, model_name, config: SpeakerEmbeddingModelConfig):
         super().__init__(model_name=model_name, config=config)
+
         self.config = config
-        self.fc1 = nn.Linear(config.whisper_embedding_dimension, config.target_embedding_dimension, bias=False)
+        d_in  = config.whisper_embedding_dimension
+        d_mid = config.target_embedding_dimension * 2
+        d_out = config.target_embedding_dimension
+
+        # first block: linear → ReLU
+        self.fc1   = nn.Linear(d_in, d_mid)
+        self.act1  = nn.ReLU(inplace=True)
+
+        # batch‐norm over the d_mid channels
+        self.bn    = nn.BatchNorm1d(d_mid)
+
+        # second block: dropout → linear
+        self.drop2 = nn.Dropout(0.3)
+        self.fc2   = nn.Linear(d_mid, d_out)
 
     def process(self, soundfiles: list[tuple[np.ndarray, int]]) -> torch.Tensor:
         return torch.cat(
@@ -70,8 +85,23 @@ class SpeakerEmbeddingModel(ModelBase):
         )
 
     def forward(self, whisper_embeddings: torch.Tensor) -> torch.Tensor:
-        return self.fc1(whisper_embeddings)
+        # [B, T, d_in] → [B, T, d_mid]
+        x = self.act1(self.fc1(whisper_embeddings))
 
+        # permute so BN sees channels in dim=1
+        # [B, T, d_mid] → [B, d_mid, T]
+        x = x.permute(0, 2, 1)
+        x = self.bn(x)
+        # back to [B, T, d_mid]
+        x = x.permute(0, 2, 1)
+
+        # finish MLP
+        x = self.fc2(self.drop2(x))
+
+        # normalize per time-step
+        x = F.normalize(x, p=2, dim=-1)
+        return x
+    
 
 class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
     def __init__(
