@@ -5,7 +5,8 @@ import torchaudio
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from typing import Optional
+from typing import Optional, Any
+import numpy as np
 
 from torchgen.utils import OrderedSet
 from transformers import WhisperProcessor, WhisperModel
@@ -112,15 +113,12 @@ def get_whisper() -> tuple[WhisperProcessor, WhisperModel]:
 
 _vctk_speaker_id_mapping = {}
 
-def prepare_vctk(item):
-    global _vctk_speaker_id_mapping
-    soundfile = item["flac"]
-
+def soundfile_to_whisper_embedding(soundfile: tuple[np.ndarray, int]):
     # MPS is not supported by Whisper - we get:
     # > NotImplementedError: Output channels > 65536 not supported at the MPS device.
     device = select_device_no_mps()
 
-    waveform_np, sample_rate = soundfile["array"], soundfile["sampling_rate"]
+    waveform_np, sample_rate = soundfile
     waveform = torch.from_numpy(waveform_np).to(torch.float).to(device)
 
     if sample_rate != 16000:
@@ -146,6 +144,15 @@ def prepare_vctk(item):
     # encoder_outputs.last_hidden_state shape: [batch, time, hidden_dim]
     # Note: Outputs 50 embeddings / sec, over 30 seconds for a total of 1500
     whisper_embedding = encoder_outputs.last_hidden_state  # This is the sequence of embeddings
+
+    return whisper_embedding
+
+
+def prepare_vctk(item):
+    global _vctk_speaker_id_mapping
+    soundfile = item["flac"]
+
+    whisper_embedding = soundfile_to_whisper_embedding((soundfile["array"], soundfile["sampling_rate"]))
 
     speaker_id = item["speaker_id"]
     if speaker_id not in _vctk_speaker_id_mapping:

@@ -1,23 +1,25 @@
 import torch.nn as nn
 import torch
+import numpy as np
 
-from model.harness import ModelBase, ModuleConfig, BatchResults, ModelTrainerBase, TrainingConfig, TrainingState, TrainingOverrides
+from model.harness import ModelBase, ModuleConfig, BatchResults, ModelTrainerBase, TrainingConfig, TrainingState, TrainingOverrides, select_device_no_mps
 from .prepared_datasets import generate_speaker_tagged_dataset
-from typing import Optional
-
+from typing import Optional, Any
+from .prepared_datasets import soundfile_to_whisper_embedding
 
 class SpeakerEmbeddingTwoTowersConfig(ModuleConfig):
     total_speakers: int # 109 in badayvedat/VCTK
     target_embedding_dimension: int
     whisper_embedding_dimension: int
+    inner_model_name: str = "speaker-embedding"
 
 class SpeakerEmbeddingTwoTowers(ModelBase):
     def __init__(self, model_name: str, config: SpeakerEmbeddingTwoTowersConfig):
-        super().__init__(model_name=f"{model_name}-two-towers", config=config)
+        super().__init__(model_name=model_name, config=config)
         self.config = config
 
         self.speaker_embedding_model = SpeakerEmbeddingModel(
-            model_name=model_name,
+            model_name=self.config.inner_model_name,
             config=SpeakerEmbeddingModelConfig(
                 whisper_embedding_dimension=self.config.whisper_embedding_dimension,
                 target_embedding_dimension=self.config.target_embedding_dimension,
@@ -38,6 +40,9 @@ class SpeakerEmbeddingTwoTowers(ModelBase):
             "speaker_indices": speaker_indices,
         }
 
+    def mean_embedding_over_time_interval(self, start_ms, end_ms) -> torch.Tensor:
+        raise NotImplementedError("")
+
     def forward(self, collated_batch) -> tuple[torch.Tensor, torch.Tensor]:
         model_embeddings = self.speaker_embedding_model(collated_batch["whisper_embeddings"])
         known_speaker_embeddings = self.known_speaker_embedding(collated_batch["speaker_indices"])
@@ -57,6 +62,12 @@ class SpeakerEmbeddingModel(ModelBase):
         super().__init__(model_name=model_name, config=config)
         self.config = config
         self.fc1 = nn.Linear(config.whisper_embedding_dimension, config.target_embedding_dimension, bias=False)
+
+    def process(self, soundfiles: list[tuple[np.ndarray, int]]) -> torch.Tensor:
+        return torch.cat(
+            [soundfile_to_whisper_embedding(soundfile) for soundfile in soundfiles],
+            dim = 0 # Batch dimension
+        )
 
     def forward(self, whisper_embeddings: torch.Tensor) -> torch.Tensor:
         return self.fc1(whisper_embeddings)

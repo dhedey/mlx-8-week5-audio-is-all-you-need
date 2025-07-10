@@ -17,7 +17,7 @@ class ModelDefinition(PersistableData):
 # * The first in this list is the default model
 # * Others can be run with --model <model_name>
 DEFINED_MODELS: dict[str, ModelDefinition] = {
-    "speaker-embedding-basic": ModelDefinition(
+    "speaker-embedding-basic-two-towers": ModelDefinition(
         model=models.SpeakerEmbeddingTwoTowers,
         config=models.SpeakerEmbeddingTwoTowersConfig(
             total_speakers=319,

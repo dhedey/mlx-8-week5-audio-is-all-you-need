@@ -38,3 +38,10 @@ uv run streamlit run streamlit/app.py
   * We'd need to find a good dataset
 * Can we have it hear a song sung and output the notes of the track (e.g. in MIDI format)
   * Maybe we can find an autotuned dataset
+
+## Todo list:
+
+* Learn a "silence" speaker (speaker embedding)
+* Speaker change detection:
+    * Dataset: ?? Spliced?
+    * 
