@@ -131,18 +131,18 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
         # Average over the time dimension
         mean_model_embeddings = model_embeddings.mean(dim=1)
 
-        margin = 2
+        margin = 0.5
 
         # TODO: Possibly tweak to use proper triplet loss??
 
-        # Does it align with the actual speaker embedding?
-        positive_loss = torch.nn.CosineSimilarity(dim=-1)(mean_model_embeddings, known_speaker_embeddings)
+        # Does the model's embedding align with the actual speaker embedding?
+        positive_contribution = torch.nn.CosineSimilarity(dim=-1)(mean_model_embeddings, known_speaker_embeddings)
 
-        # Does it align with all speakers?
+        # Does the model's embedding align with all speakers?
         average_speaker_embedding = self.model.average_speaker_embedding().expand_as(mean_model_embeddings)
-        negative_loss = torch.nn.CosineSimilarity(dim=-1)(mean_model_embeddings, average_speaker_embedding)
+        negative_contribution = torch.nn.CosineSimilarity(dim=-1)(mean_model_embeddings, average_speaker_embedding)
 
-        total_loss = torch.max(torch.tensor(0), margin + positive_loss - negative_loss).sum(dim=0)
+        total_loss = torch.max(torch.tensor(0), margin - positive_contribution + negative_contribution).sum(dim=0)
 
         return BatchResults(
             total_loss=total_loss,
