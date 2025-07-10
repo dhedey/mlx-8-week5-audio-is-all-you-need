@@ -2,6 +2,7 @@ import inspect
 import time
 from dataclasses import dataclass
 from typing import Optional, Self
+from itertools import islice
 
 import torch
 import wandb
@@ -18,7 +19,7 @@ class TrainingConfig(PersistableData):
     learning_rate: float
     save_only_grad_weights: bool = False
     warmup_epochs: int = 0 # Number of epochs to warm up the learning rate
-    print_after_batches: int = 10
+    recalculate_running_loss_after_batches: int = 10
     custom_validate_after_batches: Optional[int] = None
     batch_limit: Optional[int] = None
     optimizer: str = "AdamW"
@@ -40,7 +41,7 @@ class TrainingConfig(PersistableData):
     """
     early_stopping: bool = False
     early_stopping_patience: int = 5
-
+    verbose: bool = False
 
 class ValidationResults(PersistableData):
     epoch: int
@@ -108,7 +109,7 @@ class TrainingOverrides(PersistableData):
     override_batch_limit: Optional[int] = None
     override_to_epoch: Optional[int] = None
     override_learning_rate: Optional[float] = None
-    print_after_batches: Optional[int] = None
+    recalculate_running_loss_after_batches: Optional[int] = None
     validate_after_epochs: int = 1
     seed: int = 42
     use_dataset_cache: bool = True
@@ -195,6 +196,12 @@ def create_optimizer(
         case _:
             raise ValueError(f"Unsupported optimizer type: {optimizer_name}")
 
+def loss_change_description(old, new):
+    change = (new - old) / old
+    if change >= 0:
+        return f"{change:.2%} worse"
+    else:
+        return f"{(-change):.2%} better"
 
 class ModelTrainerBase:
     registered_types: dict[str, type[Self]] = {}
@@ -262,9 +269,9 @@ class ModelTrainerBase:
             self.config.learning_rate = overrides.override_learning_rate
             print(f"Overriding learning rate to {self.config.learning_rate}")
 
-        if overrides.print_after_batches is not None:
-            self.config.print_after_batches = overrides.print_after_batches
-            print(f"Overriding print after batches to {self.config.print_after_batches}")
+        if overrides.recalculate_running_loss_after_batches is not None:
+            self.config.recalculate_running_loss_after_batches = overrides.recalculate_running_loss_after_batches
+            print(f"Overriding print after batches to {self.config.recalculate_running_loss_after_batches}")
 
         self.optimizer = create_optimizer(self.model, self.config.optimizer, self.config.optimizer_params, self.config.learning_rate)
 
@@ -300,12 +307,12 @@ class ModelTrainerBase:
         else:
             self.epoch = 0
             self.total_training_time_seconds = 0.0
-            self.latest_training_results = None
-            self.best_training_results = None
-            self.all_training_results = []
-            self.latest_validation_results = None
-            self.best_validation_results = None
-            self.all_validation_results = []
+            self.latest_training_results: Optional[EpochTrainingResults] = None
+            self.best_training_results: Optional[EpochTrainingResults] = None
+            self.all_training_results: list[EpochTrainingResults] = []
+            self.latest_validation_results: Optional[ValidationResults] = None
+            self.best_validation_results: Optional[ValidationResults] = None
+            self.all_validation_results: list[ValidationResults] = []
 
     @property
     def train_data_loader(self):
@@ -382,8 +389,13 @@ class ModelTrainerBase:
         while self.epoch < self.config.epochs:
             self.epoch += 1
             print(f"======================== EPOCH {self.epoch}/{self.config.epochs} ========================")
-            print()
+            epoch_start_time = time.time()
+            previous_train_results = self.latest_training_results
+            previous_validation_results = self.latest_validation_results
+            previous_best_validation_results = self.best_validation_results
+
             self.train_epoch()
+
             if self.epoch % self.validate_after_epochs == 0 or self.epoch == self.config.epochs or self.latest_validation_results is None:
                 self.validate()
 
@@ -391,19 +403,19 @@ class ModelTrainerBase:
                     log_data = {
                         "epoch": self.epoch,
                     }
-                    def add_prefixed(data: dict, new_data: dict, prefix: str):
-                        for key, value in new_data.items():
+                    def add_prefixed(output: dict, source: dict, prefix: str):
+                        for key, value in source.items():
                             match key:
                                 case "epoch": # Ignore
                                     continue
                                 case "custom": # Flatten "custom" keys into the other data
-                                    add_prefixed(value, new_data, prefix)
+                                    add_prefixed(output, value, prefix)
                                     continue
                                 case str():
                                     if key.startswith(prefix):
-                                        data[key] = value
+                                        output[key] = value
                                     else:
-                                        data[f"{prefix}{key}"] = value
+                                        output[f"{prefix}{key}"] = value
                                 case _:
                                     raise ValueError(f"Unknown prefix type {prefix} in training.")
 
@@ -411,12 +423,48 @@ class ModelTrainerBase:
                     add_prefixed(log_data, self.latest_training_results.to_dict(), "train_")
 
                     wandb.log(log_data)
+
+            assert self.latest_training_results is not None
+            assert self.latest_validation_results is not None
+            assert self.best_validation_results is not None
+
+            time_elapsed = time.time() - epoch_start_time
+
+            print()
+            print(f"Epoch {self.epoch} complete in {time_elapsed:#.1f}s")
+
+            train_average_loss = self.latest_training_results.average_loss
+            if previous_train_results is not None:
+                train_change = f" ({loss_change_description(previous_train_results.average_loss, train_average_loss)})"
             else:
-                print(f"Skipping validation after epoch {self.epoch} because validate_after_epochs is set to {self.validate_after_epochs}, and it's not the first or last epoch")
+                train_change = ""
+
+            if self.latest_validation_results.epoch == self.epoch:
+                validation_average_train_loss = self.latest_validation_results.train_comparable_loss
+                validation_objective = self.latest_validation_results.objective
+                overfitting_measure = (validation_average_train_loss - train_average_loss) / validation_average_train_loss if validation_average_train_loss > 0 else float('inf')
+                best_objective = self.best_validation_results.objective
+
+                if previous_validation_results is not None:
+                    validation_change = f" ({loss_change_description(previous_validation_results.train_comparable_loss, validation_average_train_loss)})"
+                else:
+                    validation_change = ""
+                print(f"> Train Loss: {train_average_loss:#.3g}{train_change} | Validation Loss: {validation_average_train_loss:#.3g}{validation_change} | Overfitting: {overfitting_measure:.2%}")
+
+                if previous_best_validation_results is None or previous_best_validation_results.epoch == self.epoch:
+                    print(f"> Validation Objective: {validation_objective:#.3g} [RECORD]")
+                else:
+                    improvement = (best_objective - previous_best_validation_results.objective) / previous_best_validation_results.objective
+                    last_best_epochs_ago = self.epoch - previous_best_validation_results.epoch
+                    pluralised_epochs = "epoch" if last_best_epochs_ago == 1 else "epochs"
+                    if best_objective >= previous_best_validation_results.objective:
+                        print(f"> Validation Objective: {validation_objective:#.3g} ({improvement:.2%} better than {last_best_epochs_ago} {pluralised_epochs} ago) [RECORD]")
+                    else:
+                        print(f"> Validation Objective: {validation_objective:#.3g} ({(-improvement):.2%} worse than {last_best_epochs_ago} {pluralised_epochs} ago)")
+            else:
+                print(f"> Train Loss: {train_average_loss:#.3g}{train_change} | No validation was performed this epoch")
 
             if self.scheduler is not None:
-                print(f"Stepping scheduler at end of epoch {self.epoch}")
-
                 # Handle the parameters for the ReduceLROnPlateau scheduler
                 scheduler_step_parameters = inspect.signature(self.scheduler.step).parameters
                 if "metrics" in scheduler_step_parameters.keys():
@@ -434,7 +482,7 @@ class ModelTrainerBase:
                     print(f"Early stopping triggered at epoch {self.latest_validation_results.epoch}, because the best validation results occurred at epoch {self.best_validation_results.epoch}, over {self.config.early_stopping_patience} epochs ago")
                     break
 
-        print("Training complete.")
+        print("======================== Training complete ========================")
 
         return FullTrainingResults(
             total_epochs=self.config.epochs,
@@ -447,29 +495,35 @@ class ModelTrainerBase:
     def train_epoch(self):
         self.model.train()
 
-        print_every = self.config.print_after_batches
+        running_total_every = self.config.recalculate_running_loss_after_batches
         custom_validate_every = self.config.custom_validate_after_batches
-
-        running_loss = 0.0
-        running_samples = 0
 
         total_batches = len(self.train_data_loader)
 
-        start_epoch_time_at = time.time()
-
         if self.config.batch_limit is not None and total_batches >= self.config.batch_limit:
-            total_batches_text = f"{self.config.batch_limit:,} (limited from {total_batches:,} by config.batch_limit)"
             total_batches = self.config.batch_limit
-        else:
-            total_batches_text = f"{total_batches:,}"
-
-        print(f"> Starting training... (batch_size={self.config.batch_size}, total_batches={total_batches_text})")
-        print()
 
         epoch_loss = 0.0
         epoch_samples = 0
-        loader = tqdm(self.train_data_loader, desc=f"Epoch {self.epoch}/{self.config.epochs}, Batch 1/{total_batches}, Recent Avg Loss: 0.000")
-        for batch_idx, raw_batch in enumerate(loader):
+        running_loss = 0.0
+        running_samples = 0
+        recent_avg_loss = None
+
+        batch_num = 0
+        start_epoch_time_at = time.time()
+
+        def loader_description():
+            recent_loss = f"{recent_avg_loss:#.3g}" if recent_avg_loss is not None else "-N/A-"
+            avg_loss = f"{(epoch_loss / epoch_samples):#.3g}" if epoch_samples > 0 else "-N/A-"
+            batch_limit = "" if self.config.batch_limit is None else f", batch_limit={self.config.batch_limit}"
+            return f"Training {batch_num}/{total_batches} (batch_size={self.config.batch_size}{batch_limit}) | Avg Loss: {avg_loss} | Recent Loss: {recent_loss}"
+
+        loader = tqdm(islice(self.train_data_loader, total_batches), total=total_batches, desc=loader_description())
+
+        for raw_batch in loader:
+            batch_num += 1
+            loader.set_description(loader_description())
+
             self.optimizer.zero_grad()
             batch_results = self.process_batch(raw_batch)
 
@@ -482,11 +536,11 @@ class ModelTrainerBase:
             loss.backward()
             self.optimizer.step()
 
-            batch_num = batch_idx + 1
-            if batch_num % print_every == 0 or batch_num == total_batches:
-                loader.set_description(f"Epoch {self.epoch}/{self.config.epochs}, Batch: {batch_num}/{total_batches}, Recent Avg Loss: {(running_loss / running_samples):.3g}")
+            if batch_num % running_total_every == 0 or batch_num == total_batches:
+                recent_avg_loss = running_loss / running_samples
                 running_loss = 0.0
                 running_samples = 0
+                loader.set_description(loader_description())
                 
             if custom_validate_every is not None and batch_num % custom_validate_every == 0:
                 print()
@@ -495,14 +549,9 @@ class ModelTrainerBase:
                 metrics = self.start_custom_validation()
                 self.finalize_custom_validation(total_samples=0, total_batches=0, custom_validation_metrics=metrics)
 
-            if batch_num == total_batches: # Handle self.config.batch_limit
-                break
 
         average_loss = epoch_loss / epoch_samples if epoch_samples > 0 else 0.0
         training_time = time.time() - start_epoch_time_at
-        print()
-        print(f"Epoch training complete (Epoch Avg Loss: {average_loss:.3g}, Time: {training_time:.1f}s)")
-        print()
 
         if self.total_training_time_seconds is not None:
             self.total_training_time_seconds += training_time
@@ -521,27 +570,34 @@ class ModelTrainerBase:
             self.best_training_results = training_results
 
     def _run_validation(self) -> ValidationResults:
-        print_every = self.config.print_after_batches
-        running_loss = 0.0
-        running_samples = 0
+        running_total_every = self.config.recalculate_running_loss_after_batches
 
         total_batches = len(self.validation_data_loader)
-        start_time = time.time()
 
         if self.config.batch_limit is not None and total_batches >= self.config.batch_limit:
-            total_batches_text = f"{self.config.batch_limit:,} (limited from {total_batches:,} by config.batch_limit)"
             total_batches = self.config.batch_limit
-        else:
-            total_batches_text = f"{total_batches:,}"
-
-        print(f"> Starting train-comparable validation... (batch_size={self.config.batch_size}, total_batches={total_batches_text})")
-        print()
 
         custom_validation_metrics = self.start_custom_validation()
         total_loss = 0.0
         total_samples = 0
-        loader = tqdm(self.validation_data_loader, desc=f"Validation batch: 1/{total_batches}, Recent Avg Loss: 0.0000")
-        for batch_idx, raw_batch in enumerate(loader):
+        running_loss = 0.0
+        running_samples = 0
+        recent_avg_loss = None
+
+        batch_num = 0
+
+        def loader_description():
+            recent_loss = f"{recent_avg_loss:#.3g}" if recent_avg_loss is not None else "-N/A-"
+            avg_loss = f"{(total_loss / total_samples):#.3g}" if total_samples > 0 else "-N/A-"
+            batch_limit = "" if self.config.batch_limit is None else f", batch_limit={self.config.batch_limit}"
+            return f"Validation {batch_num}/{total_batches} (batch_size={self.config.batch_size}{batch_limit}) | Avg Loss: {avg_loss} | Recent Loss: {recent_loss}"
+
+        loader = tqdm(islice(self.validation_data_loader, total_batches), total=total_batches, desc=loader_description())
+
+        for raw_batch in loader:
+            batch_num += 1
+            loader.set_description(loader_description())
+
             batch_results = self.process_batch(raw_batch)
 
             loss = batch_results.total_loss
@@ -550,8 +606,6 @@ class ModelTrainerBase:
             total_samples += batch_results.num_samples
             total_loss += loss.item()
 
-            batch_num = batch_idx + 1
-
             self.custom_validate_batch(
                 custom_validation_metrics,
                 batch_results,
@@ -559,13 +613,11 @@ class ModelTrainerBase:
                 total_batches,
             )
 
-            if batch_num % print_every == 0 or batch_num == total_batches:
-                loader.set_description(f"Validation batch: {batch_num}/{total_batches}, Recent Avg Loss: {(running_loss / running_samples):.3g}")
+            if batch_num % running_total_every == 0 or batch_num == total_batches:
+                recent_avg_loss = running_loss / running_samples
                 running_loss = 0.0
                 running_samples = 0
-
-            if batch_num == total_batches:  # Handle self.config.batch_limit
-                break
+                loader.set_description(loader_description())
 
         average_loss = total_loss / total_samples if total_samples > 0 else 0.0
 
@@ -583,24 +635,10 @@ class ModelTrainerBase:
         if self.best_validation_results is None or validation_results.objective > self.best_validation_results.objective:
             self.best_validation_results = validation_results
 
-        time_elapsed = time.time() - start_time
-        validation_average_train_loss = validation_results.train_comparable_loss
-        if self.latest_training_results is not None:
-            train_average_loss = self.latest_training_results.average_loss
-            overfitting_measure = (validation_average_train_loss - train_average_loss) / validation_average_train_loss if validation_average_train_loss > 0 else float('inf')
-        else:
-            train_average_loss = "UNK"
-            overfitting_measure = "UNK"
-
-        print()
-        print(f"Validation complete (Val/Train Loss: {validation_average_train_loss:.3g}/{train_average_loss:.3g}, Overfitting: {overfitting_measure:.2%}, Time: {time_elapsed:.1f}s)")
-        print()
-
         custom_results_str = str(finalized_custom_results)
         if custom_results_str != "" and custom_results_str != "{}":
-            print(f"Custom validation results:")
-            print(f"{custom_results_str}")
             print()
+            print(f"Custom validation results: {custom_results_str}")
 
         return validation_results
 
@@ -634,7 +672,8 @@ class ModelTrainerBase:
         )
 
         if self.latest_validation_results is None:
-            print("No new validation loss available, skipping comparison with the best model.")
+            if self.config.verbose:
+                print("No new validation loss available, skipping comparison with the best model.")
             return
 
         best_model_name = self.model.model_name + '-best'
@@ -649,17 +688,19 @@ class ModelTrainerBase:
                 print(f"⚠️ Failed to load the best model training state: {e}")
 
         def format_optional_float(value):
-            return f"{value:.3g}" if value is not None else "N/A"
+            return f"{value:#.3g}" if value is not None else "N/A"
 
         latest_validation_objective = self.latest_validation_results.objective
 
         is_improvement = best_validation_objective is None or latest_validation_objective > best_validation_objective
         if is_improvement:
-            print(f"The current validation objective {format_optional_float(latest_validation_objective)} is better than the previous best validation objective {format_optional_float(best_validation_objective)} from epoch {best_validation_epoch}, saving as {best_model_name}...")
+            if self.config.verbose:
+                print(f"The current validation objective {format_optional_float(latest_validation_objective)} is better than the previous best validation objective {format_optional_float(best_validation_objective)} from epoch {best_validation_epoch}, saving as {best_model_name}...")
             self.model.save_model_data(
                 file_name=best_model_name,
                 training_config_dict=self.config.to_dict(),
                 training_state_dict=training_state.to_dict(),
             )
         else:
-            print(f"The current validation objective {format_optional_float(latest_validation_objective)} is not better than the previous best validation objective {format_optional_float(best_validation_objective)} from epoch {best_validation_epoch}, so not saving as best.")
+            if self.config.verbose:
+                print(f"The current validation objective {format_optional_float(latest_validation_objective)} is not better than the previous best validation objective {format_optional_float(best_validation_objective)} from epoch {best_validation_epoch}, so not saving as best.")

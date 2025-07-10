@@ -28,7 +28,7 @@ DEFINED_MODELS: dict[str, ModelDefinition] = {
         training_config=TrainingConfig(
             batch_size=32,
             epochs=5,
-            print_after_batches=1,
+            recalculate_running_loss_after_batches=1,
             learning_rate=0.0005,
             optimizer="adamw",
         ),
@@ -50,7 +50,7 @@ DEFINED_MODELS: dict[str, ModelDefinition] = {
         training_config=models.UrbanSoundClassifierModelTrainingConfig(
             batch_size=128,
             epochs=5,
-            print_after_batches=1,
+            recalculate_running_loss_after_batches=1,
             learning_rate=0.0005,
             optimizer="adamw",
         )
@@ -64,7 +64,7 @@ DEFINED_MODELS: dict[str, ModelDefinition] = {
         training_config=models.UrbanSoundClassifierModelTrainingConfig(
             batch_size=128,
             epochs=5,
-            print_after_batches=1,
+            recalculate_running_loss_after_batches=1,
             learning_rate=0.0005,
             optimizer="adamw",
         ),

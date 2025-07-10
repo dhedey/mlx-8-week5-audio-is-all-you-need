@@ -86,7 +86,12 @@ class ModelBase(nn.Module):
             },
         }, model_path)
 
-        print(f"Model saved to {model_path} (save_only_grad_weights={save_only_grad_weights})")
+        print_path = os.path.relpath(model_path, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+        if save_only_grad_weights:
+            print(f"Model (learnable weights only) saved to {print_path}")
+        else:
+            print(f"Model saved to {print_path}")
 
     @classmethod
     def exists(

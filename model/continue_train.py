@@ -127,7 +127,7 @@ if __name__ == "__main__":
         override_batch_limit=args.batch_limit,
         override_learning_rate=args.learning_rate,
         validate_after_epochs=args.validate_after_epochs,
-        print_after_batches=args.print_after_batches,
+        recalculate_running_loss_after_batches=args.print_after_batches,
         seed=args.seed,
         use_dataset_cache=not args.ignore_dataset_cache,
     )
