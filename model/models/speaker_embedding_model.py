@@ -56,7 +56,7 @@ class SpeakerEmbeddingModel(ModelBase):
     def __init__(self, model_name: str, config: SpeakerEmbeddingModelConfig):
         super().__init__(model_name=model_name, config=config)
         self.config = config
-        self.fc1 = nn.Linear(config.whisper_embedding_dimension, config.target_embedding_dimension)
+        self.fc1 = nn.Linear(config.whisper_embedding_dimension, config.target_embedding_dimension, bias=False)
 
     def forward(self, whisper_embeddings: torch.Tensor) -> torch.Tensor:
         return self.fc1(whisper_embeddings)
@@ -125,13 +125,18 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
         }
 
         model_embeddings, known_speaker_embeddings = self.model(collated_batch)
+        batch_size = len(model_embeddings)
 
         # TODO: Tweak to only take the mean over the time-interval from the original data clip
 
         # Average over the time dimension
         mean_model_embeddings = model_embeddings.mean(dim=1)
+        assert mean_model_embeddings.shape == (batch_size, self.model.config.target_embedding_dimension)
 
-        margin = 0.5
+        ### ?! The model embeddings are almost the same for almost all audios
+        print(mean_model_embeddings)
+
+        margin = 0.7
 
         # TODO: Possibly tweak to use proper triplet loss??
 
@@ -139,7 +144,9 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
         positive_contribution = torch.nn.CosineSimilarity(dim=-1)(mean_model_embeddings, known_speaker_embeddings)
 
         # Does the model's embedding align with all speakers?
-        average_speaker_embedding = self.model.average_speaker_embedding().expand_as(mean_model_embeddings)
+        batch_size = len(positive_contribution)
+        average_speaker_embedding = self.model.average_speaker_embedding().repeat(batch_size, 1)
+
         negative_contribution = torch.nn.CosineSimilarity(dim=-1)(mean_model_embeddings, average_speaker_embedding)
 
         total_loss = torch.max(torch.tensor(0), margin - positive_contribution + negative_contribution).sum(dim=0)
