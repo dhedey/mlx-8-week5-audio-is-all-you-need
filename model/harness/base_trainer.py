@@ -66,7 +66,10 @@ class ValidationResults(PersistableData):
         if "objective" in self.custom:
             return self.custom["objective"]
         else:
-            return 1/self.train_comparable_loss
+            if self.train_comparable_loss < 0:
+                raise ValueError("Loss is expected to be positive")
+            eps = 0.00001
+            return 1/max(self.train_comparable_loss, eps)
 
 
 @dataclass
