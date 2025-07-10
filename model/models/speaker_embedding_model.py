@@ -137,7 +137,7 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
         # These appear to be 0 on Cuda???
         # print(mean_model_embeddings)
 
-        margin = 0.7
+        margin = 0.85
 
         # TODO: Possibly tweak to use proper triplet loss??
 
