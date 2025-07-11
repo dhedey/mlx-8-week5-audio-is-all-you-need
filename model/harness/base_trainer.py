@@ -238,14 +238,13 @@ class ModelTrainerBase(ABC):
             self,
             model: ModelBase,
             config: TrainingConfig,
-            processor: ProcessorBase,
             continuation: Optional[TrainingState] = None,
             overrides: Optional[TrainingOverrides] = None,
         ):
 
         self.model = model
         self.config = config
-        self.processor = processor
+        self.processor = self.create_processor()
 
         learnable_weights_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
         total_weights_count = sum(p.numel() for p in model.parameters())
@@ -323,23 +322,37 @@ class ModelTrainerBase(ABC):
             self.best_validation_results: Optional[ValidationResults] = None
             self.all_validation_results: list[ValidationResults] = []
 
-        parallelization = config.dataset_num_workers if processor.supports_multi_processing(model.device) else None
-        print(f"Preparing datasets (batch_size = {config.batch_size}, parallelization = {parallelization})")
-        self.train_dataset, self.train_data_loader = processor.create_train_dataloader(
-            config.batch_size,
-            config.dataset_num_workers,
-            model.device,
+        dataset_num_workers = config.dataset_num_workers if self.processor.supports_multi_processing(model.device) else 0
+        print(f"Preparing datasets (batch_size = {config.batch_size}, parallelization = {dataset_num_workers if dataset_num_workers > 0 else None})")
+
+        each_dataset = self.processor.create_datasets()
+        self.train_data_loader = torch.utils.data.DataLoader(
+            each_dataset.train,
+            batch_size=config.batch_size,
+            shuffle=True,
+            num_workers=dataset_num_workers,
+            pin_memory=model.device == 'cuda',
+            collate_fn=self.processor.collate,
         )
-        self.validation_dataset, self.validation_data_loader = processor.create_validation_dataloader(
-            config.batch_size,
-            config.dataset_num_workers,
-            model.device,
-            config.shuffle_validation_set,
+        self.validation_data_loader = torch.utils.data.DataLoader(
+            each_dataset.validation,
+            batch_size=config.batch_size,
+            shuffle=config.shuffle_validation_set,
+            num_workers=dataset_num_workers,
+            pin_memory=model.device == 'cuda',
+            collate_fn=self.processor.collate,
         )
-        train_size = str(len(self.train_dataset)) if hasattr(self.train_dataset, "__len__") else "[unknown]"
+        # noinspection PyTypeChecker
+        train_size = str(len(each_dataset.train)) if hasattr(each_dataset.train, "__len__") else "[unknown]"
         print(f"Training data: {train_size} across {len(self.train_data_loader)} batches")
-        validation_size = str(len(self.validation_dataset)) if hasattr(self.validation_dataset, "__len__") else "[unknown]"
-        print(f"Validation data: {validation_size} across {len(self.train_data_loader)} batches")
+        # noinspection PyTypeChecker
+        validation_size = str(len(each_dataset.validation)) if hasattr(each_dataset.validation, "__len__") else "[unknown]"
+        print(f"Validation data: {validation_size} across {len(self.validation_data_loader)} batches")
+
+    @classmethod
+    @abstractmethod
+    def create_processor(cls) -> ProcessorBase:
+        raise NotImplementedError("This method should be implemented by subclasses.")
 
     @abstractmethod
     def process_batch(self, raw_batch) -> BatchResults:

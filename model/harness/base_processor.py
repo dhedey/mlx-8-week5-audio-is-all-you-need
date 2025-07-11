@@ -1,15 +1,17 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
 from typing import Iterable
+from dataclasses import dataclass
 from abc import ABC, abstractmethod
+
+@dataclass
+class TrainingDatasets:
+    train: Dataset | Iterable
+    validation: Dataset | Iterable
 
 class ProcessorBase(ABC):
     @abstractmethod
-    def create_train_dataset(self) -> Dataset | Iterable:
-        raise NotImplementedError("This property should be implemented by subclasses.")
-
-    @abstractmethod
-    def create_validation_dataset(self) -> Dataset | Iterable:
+    def create_datasets(self) -> TrainingDatasets:
         raise NotImplementedError("This property should be implemented by subclasses.")
 
     @abstractmethod
