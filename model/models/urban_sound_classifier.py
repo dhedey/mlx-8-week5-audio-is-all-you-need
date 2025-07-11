@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch
 
-from model.harness import ModelBase, ModuleConfig, BatchResults, ModelTrainerBase, TrainingConfig, TrainingState, TrainingOverrides
+from model.harness import ModelBase, ModuleConfig, BatchResults, ModelTrainerBase, TrainingConfig, TrainingState, TrainingOverrides, ProcessorBase, TrainingDatasets
 from .prepared_datasets import generate_urban_classifier_dataset
 from typing import Optional
 
@@ -9,20 +9,6 @@ class UrbanSoundClassifierModel(ModelBase):
     def __init__(self, model_name: str, config: ModuleConfig):
         super().__init__(model_name=model_name, config=config)
         self.config = config
-
-    def collate(self, dataset_batch) -> dict:
-        # Debug print for input data        
-        spectrograms = torch.tensor([
-            item["spectrogram"] for item in dataset_batch
-        ], dtype=torch.float)        
-        labels = torch.tensor([
-            item["class_id"] for item in dataset_batch
-        ], dtype=torch.long)
-
-        return {
-            "spectrograms": spectrograms,
-            "labels": labels,
-        }
 
     def forward(self, collated_batch) -> torch.Tensor:
         """
@@ -167,7 +153,39 @@ class PatchTransformerUrbanSoundClassifierModel(UrbanSoundClassifierModel):
         return self.time_frames
 
 class UrbanSoundClassifierModelTrainingConfig(TrainingConfig):
-    pass
+    validation_fold: int = 1
+
+class UrbanSoundProcessor(ProcessorBase):
+    def __init__(self, config: UrbanSoundClassifierModelTrainingConfig, num_mels: int, time_frames: int):
+        self.config = config
+        self.num_mels = num_mels
+        self.time_frames = time_frames
+
+    def create_datasets(self) -> TrainingDatasets:
+        validation_fold = self.config.validation_fold
+        assert 1 <= validation_fold <= 10
+
+        print(f"Preparing datasets with validation_fold = {validation_fold}...")
+
+        train_dataset, eval_dataset = generate_urban_classifier_dataset(validation_fold, self.num_mels, self.time_frames)
+
+        return TrainingDatasets(
+            train=train_dataset,
+            validation=eval_dataset,
+        )
+
+    def collate(self, dataset_batch):
+        spectrograms = torch.tensor([
+            item["spectrogram"] for item in dataset_batch
+        ], dtype=torch.float)
+        labels = torch.tensor([
+            item["class_id"] for item in dataset_batch
+        ], dtype=torch.long)
+
+        return {
+            "spectrograms": spectrograms,
+            "labels": labels,
+        }
 
 class UrbanSoundClassifierModelTrainer(ModelTrainerBase):
     def __init__(
@@ -182,49 +200,14 @@ class UrbanSoundClassifierModelTrainer(ModelTrainerBase):
         # These are already stored in the base class. But setting them again helps the IDE understand their type.
         self.model = model
         self.config = config
-        self.device = next(model.parameters()).device
 
-        validation_fold = 1
-        print(f"Preparing datasets with validation_fold = {validation_fold}...")
-        num_mels = model.total_mels()
-        total_time_frames = model.total_time_frames()
-
-        train_dataset, eval_dataset = generate_urban_classifier_dataset(validation_fold, num_mels, total_time_frames)
-
-        print(f"Training set size: {len(train_dataset)}")
-        print(f"Test set size: {len(eval_dataset)}")
-
-        self.train_loader = self.create_dataloader(train_dataset, self.config.batch_size, 2, model.collate)
-        self.test_loader = self.create_dataloader(eval_dataset, self.config.batch_size, 2, model.collate)
-
-        print()
-
-    def create_dataloader(self, dataset, batch_size, num_workers, collate_fn):
-        device = self.model.get_device()
-        # Disable multiprocessing workers only for MPS (Apple Silicon GPU)
-        num_workers = 0 if device.type == 'mps' else num_workers
-        
-        return torch.utils.data.DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=(device.type == 'cuda'),  # Only pin memory for CUDA devices
-            collate_fn=collate_fn
-        )
-
-    @property
-    def train_data_loader(self):
-        return self.train_loader
-
-    @property
-    def validation_data_loader(self):
-        return self.test_loader
+    def create_processor(self) -> ProcessorBase:
+        return UrbanSoundProcessor(self.config, self.model.total_mels(), self.model.total_time_frames())
 
     def process_batch(self, collated_batch) -> BatchResults:
         # Move batch to the same device as the model
         collated_batch = {
-            key: tensor.to(self.device) if isinstance(tensor, torch.Tensor) else tensor
+            key: tensor.to(self.model.device) if isinstance(tensor, torch.Tensor) else tensor
             for key, tensor in collated_batch.items()
         }
 

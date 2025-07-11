@@ -6,7 +6,8 @@ import einops
 import math
 import pydantic
 
-from model.harness import ModelBase, ModuleConfig, BatchResults, ModelTrainerBase, TrainingConfig, TrainingState, TrainingOverrides, select_device_no_mps
+from model.harness import ModelBase, ModuleConfig, BatchResults, ModelTrainerBase, TrainingConfig, TrainingState, \
+    TrainingOverrides, select_device_no_mps, TrainingDatasets, ProcessorBase
 from .prepared_datasets import generate_speaker_tagged_dataset
 from typing import Optional, Any, Literal
 from .prepared_datasets import soundfile_to_whisper_embedding
@@ -53,28 +54,6 @@ class SpeakerEmbeddingTwoTowers(ModelBase):
                 raise ValueError(f"Unknown embedding model configuration: {self.config.embedding_model}")
 
         self.known_speaker_embedding = nn.Embedding(config.total_speakers, config.target_embedding_dimension)
-
-    def collate(self, dataset_batch) -> dict:
-        whisper_embeddings = torch.cat([
-            torch.tensor(item["whisper_embedding"], dtype=torch.float) for item in dataset_batch
-        ])
-        start_offsets_ms = torch.tensor([
-            item["start_offset_ms"] for item in dataset_batch
-        ], dtype=torch.long)
-        end_offsets_ms = torch.tensor([
-            item["end_offset_ms"] for item in dataset_batch
-        ], dtype=torch.long)
-        speaker_indices = torch.tensor([
-            item["speaker_index"] for item in dataset_batch
-        ], dtype=torch.long)
-
-
-        return {
-            "whisper_embeddings": whisper_embeddings,
-            "speaker_indices": speaker_indices,
-            "start_offsets_ms": start_offsets_ms,
-            "end_offsets_ms": end_offsets_ms,
-        }
 
     def forward(self, collated_batch) -> tuple[torch.Tensor, torch.Tensor]:
         mean_embedding = self.speaker_embedding_model.mean_embedding_over_time_interval(
@@ -169,6 +148,38 @@ class LayeredSpeakerEmbeddingModel(SpeakerEmbeddingModel):
         x = F.normalize(x, p=2, dim=-1)
         return x
 
+class VctkProcessor(ProcessorBase):
+    def create_datasets(self) -> TrainingDatasets:
+        import datasets
+        datasets.config.IN_MEMORY_MAX_SIZE = 2 * 1024 * 1024 # 2GB
+        train_dataset, eval_dataset, _ = generate_speaker_tagged_dataset()
+        return TrainingDatasets(
+            train=train_dataset,
+            validation=eval_dataset,
+        )
+
+    def collate(self, dataset_batch) -> dict:
+        whisper_embeddings = torch.cat([
+            torch.tensor(item["whisper_embedding"], dtype=torch.float) for item in dataset_batch
+        ])
+        start_offsets_ms = torch.tensor([
+            item["start_offset_ms"] for item in dataset_batch
+        ], dtype=torch.long)
+        end_offsets_ms = torch.tensor([
+            item["end_offset_ms"] for item in dataset_batch
+        ], dtype=torch.long)
+        speaker_indices = torch.tensor([
+            item["speaker_index"] for item in dataset_batch
+        ], dtype=torch.long)
+
+        return {
+            "whisper_embeddings": whisper_embeddings,
+            "speaker_indices": speaker_indices,
+            "start_offsets_ms": start_offsets_ms,
+            "end_offsets_ms": end_offsets_ms,
+        }
+
+
 class SpeakerEmbeddingTrainingConfig(TrainingConfig):
     loss_kind: Literal["triplet", "david"] = "david"
 
@@ -186,46 +197,8 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
         self.model = model
         self.config = config
 
-        import datasets
-        datasets.config.IN_MEMORY_MAX_SIZE = 2 * 1024 * 1024 # 2GB
-
-        print(f"Preparing datasets")
-
-        train_dataset, eval_dataset, dataset_total_speakers = generate_speaker_tagged_dataset()
-
-        print(f"The dataset has {dataset_total_speakers} total speakers")
-
-        assert dataset_total_speakers <= self.model.config.total_speakers, f"The model assumes {self.model.config.total_speakers} total speakers, but the dataset has more ({dataset_total_speakers})"
-
-        print(f"Training set size: {len(train_dataset)}")
-        print(f"Test set size: {len(eval_dataset)}")
-
-        self.train_loader = self.create_dataloader(train_dataset, self.config.batch_size, 2, model.collate)
-        self.test_loader = self.create_dataloader(eval_dataset, self.config.batch_size, 2, model.collate)
-
-        print()
-
-    def create_dataloader(self, dataset, batch_size, num_workers, collate_fn):
-        device = self.model.get_device()
-        # Disable multiprocessing workers only for MPS (Apple Silicon GPU)
-        num_workers = 0 if device.type == 'mps' else num_workers
-
-        return torch.utils.data.DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=self.model.get_device() == 'cuda',
-            collate_fn=collate_fn
-        )
-
-    @property
-    def train_data_loader(self):
-        return self.train_loader
-
-    @property
-    def validation_data_loader(self):
-        return self.test_loader
+    def create_processor(self) -> ProcessorBase:
+        return VctkProcessor()
 
     def process_batch(self, collated_batch) -> BatchResults:
         # model_embeddings: [Batch, Time=1500, OurEmbedding=8]
@@ -243,7 +216,6 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
         assert mean_model_embeddings.shape == (batch_size, self.model.config.target_embedding_dimension)
 
         ### ?! The model embeddings are almost the same for almost all audios
-        ### The model embeddings appear to be 0 on Cuda???
 
         match self.config.loss_kind:
             case "david":

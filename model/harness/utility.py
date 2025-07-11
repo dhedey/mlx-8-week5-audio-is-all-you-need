@@ -26,9 +26,9 @@ _selected_device = None
 _selected_device_no_mps = None
 
 def _select_device_string():
-    if (torch.cuda.is_available()):
+    if torch.cuda.is_available():
         return "cuda"
-    elif (torch.backends.mps.is_available()):
+    elif torch.backends.mps.is_available():
         # MPS has too many issues and is often slower.
         # Let's just use CPU locally
         return "cpu"

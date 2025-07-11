@@ -3,6 +3,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Self
 from itertools import islice
+from abc import ABC, abstractmethod
 
 import torch
 import wandb
@@ -11,12 +12,15 @@ from torch import optim as optim
 from tqdm.auto import tqdm
 
 from .base_model import ModelBase
+from .base_processor import ProcessorBase
 from .utility import PersistableData
 
 class TrainingConfig(PersistableData):
     batch_size: int
     epochs: int
     learning_rate: float
+    dataset_num_workers: int = 2
+    shuffle_validation_set: bool = True
     save_only_grad_weights: bool = False
     warmup_epochs: int = 0 # Number of epochs to warm up the learning rate
     recalculate_running_loss_after_batches: int = 10
@@ -206,7 +210,7 @@ def loss_change_description(old, new):
     else:
         return f"{(-change):.2%} better"
 
-class ModelTrainerBase:
+class ModelTrainerBase(ABC):
     registered_types: dict[str, type[Self]] = {}
     config_class: type[TrainingConfig] = TrainingConfig
 
@@ -317,14 +321,40 @@ class ModelTrainerBase:
             self.best_validation_results: Optional[ValidationResults] = None
             self.all_validation_results: list[ValidationResults] = []
 
-    @property
-    def train_data_loader(self):
-        raise NotImplementedError("This property should be implemented by subclasses.")
+        self.processor = self.create_processor()
+        dataset_num_workers = config.dataset_num_workers if self.processor.supports_multi_processing(model.device) else 0
+        print(f"Preparing datasets (batch_size = {config.batch_size}, parallelization = {dataset_num_workers if dataset_num_workers > 0 else None})")
 
-    @property
-    def validation_data_loader(self):
-        raise NotImplementedError("This property should be implemented by subclasses.")
+        each_dataset = self.processor.create_datasets()
+        self.train_data_loader = torch.utils.data.DataLoader(
+            each_dataset.train,
+            batch_size=config.batch_size,
+            shuffle=True,
+            num_workers=dataset_num_workers,
+            pin_memory=model.device == 'cuda',
+            collate_fn=self.processor.collate,
+        )
+        self.validation_data_loader = torch.utils.data.DataLoader(
+            each_dataset.validation,
+            batch_size=config.batch_size,
+            shuffle=config.shuffle_validation_set,
+            num_workers=dataset_num_workers,
+            pin_memory=model.device == 'cuda',
+            collate_fn=self.processor.collate,
+        )
+        # noinspection PyTypeChecker
+        train_size = str(len(each_dataset.train)) if hasattr(each_dataset.train, "__len__") else "[unknown]"
+        print(f"Training data: {train_size} across {len(self.train_data_loader)} batches")
+        # noinspection PyTypeChecker
+        validation_size = str(len(each_dataset.validation)) if hasattr(each_dataset.validation, "__len__") else "[unknown]"
+        print(f"Validation data: {validation_size} across {len(self.validation_data_loader)} batches")
 
+    @abstractmethod
+    def create_processor(self) -> ProcessorBase:
+        """This is run in the super constructor, after self.config and self.model are set"""
+        raise NotImplementedError("This method should be implemented by subclasses.")
+
+    @abstractmethod
     def process_batch(self, raw_batch) -> BatchResults:
         raise NotImplementedError("This method should be implemented by subclasses.")
 

@@ -41,6 +41,10 @@ class ModelBase(nn.Module):
 
         cls.config_class = config_param_class
 
+    @property
+    def device(self):
+        return self.get_device()
+
     def get_device(self):
         return next(self.parameters()).device
     
