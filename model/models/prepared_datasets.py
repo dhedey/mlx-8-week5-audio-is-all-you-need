@@ -189,11 +189,7 @@ def generate_speaker_tagged_dataset(
     use_alias: str = "latest",
 ):
     # 0. Check if we're logged in to W&B
-    try:
-        api = wandb.Api()
-        use_wandb = bool(api.api_key)
-    except Exception:
-        use_wandb = False
+    use_wandb = wandb.run is not None
 
     if not use_wandb:
         print("🔒 Not logged into W&B; skipping artifact download & logging.")
