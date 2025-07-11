@@ -183,7 +183,7 @@ def every_10th(item):
     return is_included
 
 def generate_speaker_tagged_dataset(
-    cache_dir: str = "datasets/vctk_processed",
+    cache_dir: str = "datasets/vctk_processed_v2",
     raw_cache_dir: str = "datasets/vctk_raw",
     artifact_name: str = "vctk-processed-dataset-v2",
     use_alias: str = "latest",
@@ -208,12 +208,12 @@ def generate_speaker_tagged_dataset(
     # 1. Try loading existing processed dataset from disk
     try:
         print(f"Loading processed dataset from local cache: {cache_dir}")
-        ds = load_from_disk(cache_dir)
+        ds = datasets.load_from_disk(cache_dir)
         train, valid = ds["train"], ds["validation"]
         return train, valid, 0
-    except Exception:
-        print("Local cache miss.")
-
+    except Exception as e:
+        print(f"Local cache miss: {e}")
+    
     # 2. If logged in, try fetching the artifact
     if use_wandb:
         try:
@@ -225,21 +225,21 @@ def generate_speaker_tagged_dataset(
             print(f"✅ Artifact downloaded into {download_root}")
             ds = datasets.load_from_disk(download_root)
             train, valid = ds["train"], ds["validation"]
-            return train, valid, len(train)
+            return train, valid, 0
         except Exception as e:
             print(f"⚠️ Artifact fetch failed: {e}")
             print("Falling back to local rebuild…")
     else:
         print("Skipping W&B fetch; rebuilding locally.")
-
+    
     # 2. Download and process if not cached
     print("Downloading and processing VCTK dataset...")
     raw_dataset = datasets.load_dataset("badayvedat/VCTK", cache_dir=raw_cache_dir)
-
+    
     # ... your processing steps here ...
     train = raw_dataset["train"].filter(every_10th).map(prepare_vctk_v2, remove_columns=raw_dataset["train"].column_names)
     eval = raw_dataset["validation"].filter(every_10th).map(prepare_vctk_v2, remove_columns=raw_dataset["validation"].column_names)
-
+    
     # 3. Save processed dataset to disk for future use
     processed = datasets.DatasetDict({"train": train, "validation": eval})
     processed.save_to_disk(cache_dir)
