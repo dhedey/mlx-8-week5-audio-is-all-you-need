@@ -248,8 +248,36 @@ class SpeakerEmbeddingModelTrainer(ModelTrainerBase):
         return BatchResults(
             total_loss=total_loss,
             num_samples=batch_size,
-            intermediates={}
+            intermediates={
+                "mean_model_embeddings": mean_model_embeddings,
+                "speaker_indices": collated_batch["speaker_indices"],
+            }
         )
+
+    def start_custom_validation(self) -> dict:
+        return {
+            "correct_predictions": 0,
+        }
+
+    def custom_validate_batch(self, custom_validation_metrics: dict, batch_results: BatchResults, batch_num: int, total_batches: int):
+        mean_model_embeddings = batch_results.intermediates["mean_model_embeddings"]
+        speaker_indices = batch_results.intermediates["speaker_indices"]
+
+        correct = 0
+        for embedding, actual_speaker_index in zip(mean_model_embeddings, speaker_indices):
+            repeated_embedding = embedding.expand_as(self.model.known_speaker_embedding.weight)
+            guessed_id = torch.nn.CosineSimilarity(dim=-1)(repeated_embedding, self.model.known_speaker_embedding.weight).argmax().item()
+            if actual_speaker_index == guessed_id:
+                correct += 1
+
+        custom_validation_metrics["correct_predictions"] += correct
+
+    def finalize_custom_validation(self, total_samples: int, total_batches: int, custom_validation_metrics: dict) -> dict:
+        prediction_accuracy = custom_validation_metrics["correct_predictions"] / total_samples
+        return {
+            "prediction_accuracy": prediction_accuracy,
+            "objective": prediction_accuracy
+        }
     
 if __name__ == "__main__":
    print("Run default_models instead of this file")
