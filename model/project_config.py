@@ -91,21 +91,32 @@ DEFINED_MODELS: dict[str, ModelDefinition] = {
                         'embedding_dimension': {
                             'values': [8, 16]
                         },
+                        'learning_rate': {
+                            'min': 0.00001,
+                            'max': 0.001,
+                            'distribution': 'log_uniform_values'
+                        },
+                        'loss_kind': {
+                            'values': ["david", "triplet"]
+                        },
+                        'model_kind': {
+                            'values': ["layered", "linear"]
+                        },
                     }
                 },
                 model_config_mapper=lambda config: models.SpeakerEmbeddingTwoTowersConfig(
                     total_speakers=319,
                     target_embedding_dimension=config.embedding_dimension,
                     whisper_embedding_dimension=384,
-                    embedding_model=models.LayeredSpeakerEmbeddingConfig(),
+                    embedding_model=models.LayeredSpeakerEmbeddingConfig() if config.model_kind == "layered" else models.LinearSpeakerEmbeddingConfig(),
                 ),
                 training_config_mapper=lambda config: models.SpeakerEmbeddingTrainingConfig(
                     batch_size=32,
-                    epochs=2,
+                    epochs=3,
                     recalculate_running_loss_after_batches=1,
-                    learning_rate=0.0005,
+                    learning_rate=config.learning_rate,
                     optimizer="adamw",
-                    loss_kind="david",
+                    loss_kind=config.loss_kind,
                 ),
             )
         }
