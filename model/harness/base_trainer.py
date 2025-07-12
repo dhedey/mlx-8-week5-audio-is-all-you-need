@@ -487,7 +487,10 @@ class ModelTrainerBase(ABC):
                 if previous_best_validation_results is None or previous_best_validation_results.epoch == self.epoch:
                     print(f"> Validation Objective: {validation_objective:#.3g} [RECORD]")
                 else:
-                    improvement = (validation_objective - previous_best_validation_results.objective) / previous_best_validation_results.objective
+                    if previous_best_validation_results.objective > 0:
+                        improvement = (validation_objective - previous_best_validation_results.objective) / previous_best_validation_results.objective
+                    else:
+                        improvement = float('inf')
                     last_best_epochs_ago = self.epoch - previous_best_validation_results.epoch
                     pluralised_epochs = "epoch" if last_best_epochs_ago == 1 else "epochs"
                     if validation_objective > previous_best_validation_results.objective:
