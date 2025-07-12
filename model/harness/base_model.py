@@ -229,9 +229,9 @@ class ModelBase(nn.Module):
                 learnable_just_len = max(len("Learnable Weights"), len(f"{total_learnable:,}"))
                 if total_any is None:
                     total_any = self.total_param_count
-                    print(f" Parent | {"Learnable Weights".rjust(learnable_just_len)} | %Learn |   %All | Module")
+                    print(f" Leaf | {"Learnable Weights".rjust(learnable_just_len)} | %Learn |   %All | Module")
 
-                leaf_part = ("Y" if len(self.children) > 0 else " ").center(8)
+                leaf_part = ("**" if len(self.children) == 0 else " ").center(6)
                 learnable_part = f"{self.learnable_param_count:,}".rjust(learnable_just_len)
                 perc_learnable_part = f"{self.learnable_param_count/total_learnable:.1%}".rjust(6)
                 perc_all_part = f"{self.learnable_param_count/total_any:.1%}".rjust(6)

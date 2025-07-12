@@ -348,6 +348,7 @@ class ModelTrainerBase(ABC):
         # noinspection PyTypeChecker
         validation_size = str(len(each_dataset.validation)) if hasattr(each_dataset.validation, "__len__") else "[unknown]"
         print(f"Validation data: {validation_size} across {len(self.validation_data_loader)} batches")
+        print()
 
     @abstractmethod
     def create_processor(self) -> ProcessorBase:

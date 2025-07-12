@@ -1,17 +1,62 @@
-from .harness import PersistableData, ModelBase, ModuleConfig, TrainingConfig, ModelTrainerBase
+from .harness import PersistableData, ModelBase, ModuleConfig, TrainingConfig, ModelTrainerBase, WandbDefaults
 import model.models as models
 import torch
+from typing import Optional, Any, Callable
+from dataclasses import dataclass
 
-WANDB_ENTITY = "mlx-bb"
-WANDB_PROJECT_NAME = "week5-audio-is-all-you-need"
+WANDB_DEFAULTS = WandbDefaults(
+    # default_entity="david-edey-machine-learning-institute",
+    default_entity="mlx-bb",
+    default_project="week5-audio-is-all-you-need",
+)
 
 has_cuda = torch.cuda.is_available()
+
+@dataclass
+class SweepDefinition:
+    config: dict
+    """
+    Equivalent to wandb_sweep.yaml but in Python - https://docs.wandb.ai/guides/sweeps/sweep-config-keys/
+    ```python
+    {
+        'method': 'bayes',  # Can be 'grid', 'random', or 'bayes'
+        'metric': {
+            'name': 'validation_objective',
+            'goal': 'maximise'
+        },
+        'parameters': {
+            'embedding_size': {
+                'values': [32, 64, 128]
+            },
+            'learning_rate': {
+                'min': 0.00001,
+                'max': 0.001,
+                'distribution': 'log_uniform_values'
+            },
+            'epochs': {
+                'value': 20
+            },
+        }
+    }
+    ```
+    """
+    model_config_mapper: Callable[[dict], ModuleConfig]
+    """
+    Maps an instance of the sweep config to a module config and training config.
+    Read fields with e.g. config.epochs
+    """
+    training_config_mapper: Callable[[dict], TrainingConfig]
+    """
+    Maps an instance of the sweep config to a module config and training config.
+    Read fields with e.g. config.epochs
+    """
 
 class ModelDefinition(PersistableData):
     model: type[ModelBase]
     config: ModuleConfig
     trainer: type[ModelTrainerBase]
     training_config: TrainingConfig
+    sweep_configs: Optional[dict[str, SweepDefinition]] = None
 
 # These are used by start_train
 # * The first in this list is the default model
@@ -34,6 +79,36 @@ DEFINED_MODELS: dict[str, ModelDefinition] = {
             optimizer="adamw",
             loss_kind="david",
         ),
+        sweep_configs={
+            "default": SweepDefinition(
+                config={
+                    'method': 'bayes',  # Can be 'grid', 'random', or 'bayes'
+                    'metric': {
+                        'name': 'validation_objective',
+                        'goal': 'maximize'
+                    },
+                    'parameters': {
+                        'embedding_dimension': {
+                            'values': [8, 16]
+                        },
+                    }
+                },
+                model_config_mapper=lambda config: models.SpeakerEmbeddingTwoTowersConfig(
+                    total_speakers=319,
+                    target_embedding_dimension=config.embedding_dimension,
+                    whisper_embedding_dimension=384,
+                    embedding_model=models.LayeredSpeakerEmbeddingConfig(),
+                ),
+                training_config_mapper=lambda config: models.SpeakerEmbeddingTrainingConfig(
+                    batch_size=32,
+                    epochs=2,
+                    recalculate_running_loss_after_batches=1,
+                    learning_rate=0.0005,
+                    optimizer="adamw",
+                    loss_kind="david",
+                ),
+            )
+        }
     ),
     "speaker-embedding-triplet-two-towers": ModelDefinition(
         model=models.SpeakerEmbeddingTwoTowers,

@@ -19,6 +19,8 @@ uv sync
 git config --global user.email "mli@david-edey.com"
 git config --global user.name "David Edey"
 
+export WANDB_DEFAULT_ENABLED=true
+
 # You can generate a new token at https://github.com/settings/personal-access-tokens
 # => Select only this repository
 # => Select Read and Write access to Contents (AKA Code)
@@ -39,6 +41,6 @@ tmux new -s training_session
 # Check GPU usage with the nvtop command
 
 # Now run a script, e.g.
-# uv run -m model.start_train --wandb
-# uv run -m model.continue_train --wandb
-# uv run -m model.models --wandb
+# uv run -m model.start_train
+# uv run -m model.continue_train
+# uv run -m model.models

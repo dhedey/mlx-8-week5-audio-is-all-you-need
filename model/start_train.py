@@ -1,8 +1,8 @@
 # Run as uv run -m model.start_train
 
 import argparse
-from model.harness import ModelBase, TrainingOverrides, select_device, upload_model_artifact
-from .project_config import WANDB_PROJECT_NAME, WANDB_ENTITY, DEFINED_MODELS, DEFAULT_MODEL_NAME
+from model.harness import ModelBase, TrainingOverrides, select_device, WandbHelper
+from .project_config import WANDB_DEFAULTS, DEFINED_MODELS, DEFAULT_MODEL_NAME
 import wandb
 import os
 
@@ -81,55 +81,23 @@ if __name__ == "__main__":
         action='store_true',
         help='Enable early stopping during training'
     )
-    parser.add_argument(
-        '--wandb', 
-        action='store_true', 
-        help='Enable wandb logging'
+    wandb_arguments_helper = WANDB_DEFAULTS.add_arg_parser_arguments(
+        parser,
+        add_model_source_args=False,
+        add_upload_model_args=True,
     )
-    parser.add_argument(
-        '--wandb-project', 
-        default=WANDB_PROJECT_NAME, 
-        help=f'W&B project name (default: {WANDB_PROJECT_NAME})'
-    )
-    parser.add_argument(
-        '--wandb-entity',
-        default=WANDB_ENTITY,
-        help='W&B entity name (used if --from-wandb is set)'
-    )
-    parser.add_argument(
-        '--no-upload-artifacts',
-        action='store_true',
-        help='Disable artifact uploading to W&B (if wandb is enabled)'
-    )
-    
     args = parser.parse_args()
 
     model_name = args.model
-
     if model_name not in DEFINED_MODELS:
         raise ValueError(f"Model '{model_name}' is not defined. The choices are: {list(DEFINED_MODELS.keys())}")
+    model_definition = DEFINED_MODELS[model_name]
 
-    parameters = DEFINED_MODELS[model_name]
+    wandb_arguments = wandb_arguments_helper.handle_arguments(args)
 
-    if args.wandb:
-        run_id = wandb.util.generate_id()
-        wandb.init(
-            id=run_id,
-            entity=args.wandb_entity,
-            project=args.wandb_project,
-            name=f"train-{model_name}-{run_id}",
-            config={
-                "model_name": model_name,
-                "model_class": parameters.model.__name__,
-                "model_config": parameters.config.to_dict(),
-                "training_config": parameters.training_config.to_dict(),
-                "from_epoch": 0,
-            },
-        )
-
-    model = parameters.model(
+    model = model_definition.model(
         model_name=model_name,
-        config=parameters.config,
+        config=model_definition.config,
     ).to(device)
 
     overrides = TrainingOverrides(
@@ -143,57 +111,26 @@ if __name__ == "__main__":
         seed=args.seed,
         use_dataset_cache=not args.ignore_dataset_cache,
     )
-    trainer = parameters.trainer(
-        model=model,
-        config=parameters.training_config,
-        overrides=overrides,
-    )
 
-    if args.immediate_validation:
-        print("Immediate validation enabled, running validation before training:")
-        trainer.validate()
-
-    results = trainer.train()
-
-    model_path = ModelBase.model_path(model_name)
-    best_model_path = ModelBase.model_path(f"{model_name}-best")
-
-    if wandb.run is not None and not args.no_upload_artifacts:
-        print("Uploading artifacts...")
-
-        artifact_metadata = {
-            "model_name": model_name,
-            "model_class": parameters.model.__name__,
-            "model_config": parameters.config.to_dict(),
-            "training_config": parameters.training_config.to_dict(),
-            "final_validation_objective": results.last_validation.objective,
-            "final_validation_loss": results.last_validation.train_comparable_loss,
-            "final_train_loss": results.last_training_epoch.average_loss,
-            "total_epochs": results.total_epochs,
-        }
-
-        if os.path.exists(model_path):
-            upload_model_artifact(
-                model_name=model_name,
-                file_path=model_path,
-                artifact_name=f"{model_name}-final",
-                metadata=artifact_metadata,
-                description=f"Final model: {model_name}"
-            )
-
-        if os.path.exists(best_model_path):
-            best_metadata = artifact_metadata.copy()
-            best_metadata["model_type"] = "best_validation"
-            upload_model_artifact(
-                model_name=model_name,
-                file_path=best_model_path,
-                artifact_name=f"{model_name}-best",
-                metadata=best_metadata,
-                description=f"Best validation model: {model_name}"
-            )
-
-    if args.wandb:
-        wandb.finish()
+    try:
+        wandb_arguments.start_run_if_required(
+            model=model,
+            training_config=model_definition.training_config.to_dict(),
+            trainer_state_dict=None,
+            overrides=overrides,
+        )
+        trainer = model_definition.trainer(
+            model=model,
+            config=model_definition.training_config,
+            overrides=overrides,
+        )
+        if args.immediate_validation:
+            print("Immediate validation enabled, running validation before training:")
+            trainer.validate()
+        results = trainer.train()
+        wandb_arguments.upload_latest_and_best_model_snapshots(model_name=trainer.model.model_name)
+    finally:
+        WandbHelper.finish()
 
 
 
